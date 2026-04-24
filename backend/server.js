@@ -28,20 +28,7 @@ if (!fs.existsSync(SCHEDULES_FILE)) fs.writeJsonSync(SCHEDULES_FILE, []);
 if (!fs.existsSync(JOBS_FILE))      fs.writeJsonSync(JOBS_FILE, []);
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://millecube-ads-hub.vercel.app',
-  /https:\/\/millecube-ads-hub.*\.vercel\.app$/
-];
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.some(o => typeof o === 'string' ? o === origin : o.test(origin))) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  }
-}));
+app.use(cors());
 app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
 
@@ -129,6 +116,14 @@ async function fetchMetaInsights(client, dateStart, dateStop) {
   };
 }
 
+function logMetaError(err, label) {
+  if (err.response) {
+    console.error(`[META ERROR] ${label}:`, JSON.stringify(err.response.data));
+  } else {
+    console.error(`[META ERROR] ${label}:`, err.message);
+  }
+}
+
 // ── Report Generator ───────────────────────────────────────────────────────────
 const reportGenerator = require('./reportGenerator');
 
@@ -161,8 +156,8 @@ async function generateReportForClient(client, dateStart, dateStop, periodLabel)
     return { success: true, filePath };
 
   } catch (err) {
+    logMetaError(err, `Report for ${client.clientCode}`);
     updateJob(job.id, { status: 'failed', error: err.message });
-    console.error(`[REPORT] Failed for ${client.clientCode}:`, err.message);
     return { success: false, error: err.message };
   }
 }
