@@ -179,11 +179,16 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
       </div>
     </div>`;
 
+  console.log(`[EMAIL] Attempting → to: ${to}, from: ${from}, subject: ${subject}`);
   try {
-    const result = await resend.emails.send({ from, to, subject, html });
-    console.log(`[EMAIL] Sent to ${to} — ${subject}`);
+    const { data, error } = await resend.emails.send({ from, to, subject, html });
+    if (error) {
+      console.error('[EMAIL] Resend rejected:', JSON.stringify(error));
+    } else {
+      console.log(`[EMAIL] Sent OK — id: ${data.id}`);
+    }
   } catch (err) {
-    console.error('[EMAIL] Failed to send:', err.message);
+    console.error('[EMAIL] Exception:', err.message);
   }
 }
 
@@ -198,40 +203,45 @@ async function uploadToDrive(filePath, fileName, clientCode) {
   try {
     const auth = new google.auth.GoogleAuth({
       credentials: JSON.parse(keyJson),
-      scopes: ['https://www.googleapis.com/auth/drive.file']
+      // 'drive' scope required — 'drive.file' only covers files the bot itself created,
+      // not folders shared with it by the account owner
+      scopes: ['https://www.googleapis.com/auth/drive']
     });
     const drive = google.drive({ version: 'v3', auth });
 
-    // Find or create a subfolder named after the client code
-    let targetFolderId = folderId;
+    // Find existing client subfolder — only create if not found
+    let targetFolderId;
     const search = await drive.files.list({
       q: `name='${clientCode}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
-      fields: 'files(id)'
+      fields: 'files(id,name)',
+      spaces: 'drive'
     });
+
     if (search.data.files.length > 0) {
       targetFolderId = search.data.files[0].id;
+      console.log(`[DRIVE] Using existing folder: ${clientCode} (${targetFolderId})`);
     } else {
       const created = await drive.files.create({
         requestBody: { name: clientCode, mimeType: 'application/vnd.google-apps.folder', parents: [folderId] },
         fields: 'id'
       });
       targetFolderId = created.data.id;
+      console.log(`[DRIVE] Created new folder: ${clientCode} (${targetFolderId})`);
     }
 
-    // Upload the .docx
+    // Upload file as Buffer — more reliable than stream on cloud servers
+    const fileBuffer = fs.readFileSync(filePath);
+    const { Readable } = require('stream');
     const uploaded = await drive.files.create({
-      requestBody: {
-        name: fileName,
-        parents: [targetFolderId]
-      },
+      requestBody: { name: fileName, parents: [targetFolderId] },
       media: {
         mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        body: fs.createReadStream(filePath)
+        body: Readable.from(fileBuffer)
       },
       fields: 'id,webViewLink'
     });
 
-    // Make file readable by anyone with the link
+    // Anyone with link can view
     await drive.permissions.create({
       fileId: uploaded.data.id,
       requestBody: { role: 'reader', type: 'anyone' }
@@ -240,7 +250,7 @@ async function uploadToDrive(filePath, fileName, clientCode) {
     console.log(`[DRIVE] Uploaded ${fileName} → ${uploaded.data.webViewLink}`);
     return uploaded.data.webViewLink;
   } catch (err) {
-    console.error('[DRIVE] Upload failed:', err.message);
+    console.error('[DRIVE] Upload failed:', err.message, err.stack);
     return null;
   }
 }
