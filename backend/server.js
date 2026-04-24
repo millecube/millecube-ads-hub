@@ -49,6 +49,7 @@ function addJob(clientId, clientCode, period, status, filePath = null, error = n
     period,
     status,        // 'running' | 'done' | 'failed'
     filePath,
+    driveUrl: null,
     error,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -124,6 +125,133 @@ function logMetaError(err, label) {
   }
 }
 
+// ── Email Notifications ────────────────────────────────────────────────────────
+const nodemailer = require('nodemailer');
+
+function getMailer() {
+  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) return null;
+  return nodemailer.createTransport({
+    host:   process.env.EMAIL_HOST,
+    port:   parseInt(process.env.EMAIL_PORT || '587'),
+    secure: process.env.EMAIL_PORT === '465',
+    auth:   { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+  });
+}
+
+async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, error) {
+  const mailer = getMailer();
+  if (!mailer) return; // EMAIL_HOST/USER/PASS not set — skip silently
+  const to   = process.env.EMAIL_TO || process.env.EMAIL_USER;
+  const from  = `"Millecube Ads Hub" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`;
+
+  const subject = status === 'done'
+    ? `Report Ready — ${client.clientCode} · ${periodLabel}`
+    : `Report Failed — ${client.clientCode} · ${periodLabel}`;
+
+  const driveBtn = driveUrl
+    ? `<p style="margin:20px 0"><a href="${driveUrl}" style="background:#07503c;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Open in Google Drive</a></p>`
+    : '';
+
+  const html = status === 'done' ? `
+    <div style="font-family:Arial,sans-serif;max-width:600px;color:#222">
+      <div style="background:#07503c;padding:24px 32px;border-radius:8px 8px 0 0">
+        <h1 style="color:#32cd32;margin:0;font-size:22px">Millecube Ads Hub</h1>
+        <p style="color:#aaa;margin:6px 0 0">Automated Report Notification</p>
+      </div>
+      <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+        <h2 style="color:#07503c;margin-top:0">✅ Report Successfully Generated</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;font-weight:bold;width:40%">Client</td><td style="padding:8px 12px">${client.name} (${client.clientCode})</td></tr>
+          <tr><td style="padding:8px 12px;font-weight:bold">Period</td><td style="padding:8px 12px">${periodLabel}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;font-weight:bold">File Name</td><td style="padding:8px 12px;font-family:monospace">${fileName}</td></tr>
+          <tr><td style="padding:8px 12px;font-weight:bold">Status</td><td style="padding:8px 12px"><span style="color:#32cd32;font-weight:bold">Done</span></td></tr>
+        </table>
+        ${driveBtn}
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital · Automated Report System · Do not reply to this email</p>
+      </div>
+    </div>` : `
+    <div style="font-family:Arial,sans-serif;max-width:600px;color:#222">
+      <div style="background:#07503c;padding:24px 32px;border-radius:8px 8px 0 0">
+        <h1 style="color:#32cd32;margin:0;font-size:22px">Millecube Ads Hub</h1>
+        <p style="color:#aaa;margin:6px 0 0">Automated Report Notification</p>
+      </div>
+      <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+        <h2 style="color:#cc3333;margin-top:0">❌ Report Generation Failed</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;font-weight:bold;width:40%">Client</td><td style="padding:8px 12px">${client.name} (${client.clientCode})</td></tr>
+          <tr><td style="padding:8px 12px;font-weight:bold">Period</td><td style="padding:8px 12px">${periodLabel}</td></tr>
+          <tr style="background:#fff3f3"><td style="padding:8px 12px;font-weight:bold">Error</td><td style="padding:8px 12px;color:#cc3333">${error}</td></tr>
+        </table>
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital · Automated Report System · Do not reply to this email</p>
+      </div>
+    </div>`;
+
+  try {
+    await mailer.sendMail({ from, to, subject, html });
+    console.log(`[EMAIL] Sent to ${to} — ${subject}`);
+  } catch (err) {
+    console.error('[EMAIL] Failed to send:', err.message);
+  }
+}
+
+// ── Google Drive Upload ────────────────────────────────────────────────────────
+const { google } = require('googleapis');
+
+async function uploadToDrive(filePath, fileName, clientCode) {
+  const keyJson  = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  if (!keyJson || !folderId) return null; // not configured — skip silently
+
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(keyJson),
+      scopes: ['https://www.googleapis.com/auth/drive.file']
+    });
+    const drive = google.drive({ version: 'v3', auth });
+
+    // Find or create a subfolder named after the client code
+    let targetFolderId = folderId;
+    const search = await drive.files.list({
+      q: `name='${clientCode}' and mimeType='application/vnd.google-apps.folder' and '${folderId}' in parents and trashed=false`,
+      fields: 'files(id)'
+    });
+    if (search.data.files.length > 0) {
+      targetFolderId = search.data.files[0].id;
+    } else {
+      const created = await drive.files.create({
+        requestBody: { name: clientCode, mimeType: 'application/vnd.google-apps.folder', parents: [folderId] },
+        fields: 'id'
+      });
+      targetFolderId = created.data.id;
+    }
+
+    // Upload the .docx
+    const uploaded = await drive.files.create({
+      requestBody: {
+        name: fileName,
+        parents: [targetFolderId]
+      },
+      media: {
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        body: fs.createReadStream(filePath)
+      },
+      fields: 'id,webViewLink'
+    });
+
+    // Make file readable by anyone with the link
+    await drive.permissions.create({
+      fileId: uploaded.data.id,
+      requestBody: { role: 'reader', type: 'anyone' }
+    });
+
+    console.log(`[DRIVE] Uploaded ${fileName} → ${uploaded.data.webViewLink}`);
+    return uploaded.data.webViewLink;
+  } catch (err) {
+    console.error('[DRIVE] Upload failed:', err.message);
+    return null;
+  }
+}
+
 // ── Report Generator ───────────────────────────────────────────────────────────
 const reportGenerator = require('./reportGenerator');
 
@@ -151,13 +279,21 @@ async function generateReportForClient(client, dateStart, dateStop, periodLabel)
       outputPath: filePath
     });
 
-    updateJob(job.id, { status: 'done', filePath: `/reports/${client.clientCode}/${fileName}` });
+    // Upload to Google Drive (non-blocking — failure won't break the report)
+    const driveUrl = await uploadToDrive(filePath, fileName, client.clientCode);
+
+    updateJob(job.id, { status: 'done', filePath: `/reports/${client.clientCode}/${fileName}`, driveUrl });
     console.log(`[REPORT] Done: ${fileName}`);
-    return { success: true, filePath };
+
+    // Send email notification
+    await sendReportEmail(client, periodLabel, 'done', fileName, driveUrl, null);
+
+    return { success: true, filePath, driveUrl };
 
   } catch (err) {
     logMetaError(err, `Report for ${client.clientCode}`);
     updateJob(job.id, { status: 'failed', error: err.message });
+    await sendReportEmail(client, periodLabel, 'failed', null, null, err.message);
     return { success: false, error: err.message };
   }
 }

@@ -113,6 +113,7 @@ export default function History() {
                 <th>Created</th>
                 <th>Updated</th>
                 <th>Download</th>
+                <th>Drive</th>
               </tr>
             </thead>
             <tbody>
@@ -164,6 +165,21 @@ export default function History() {
                       </a>
                     ) : job.status === 'running' ? (
                       <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.3)' }}>Generating…</span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.2)' }}>—</span>
+                    )}
+                  </td>
+                  <td>
+                    {job.driveUrl ? (
+                      <a
+                        href={job.driveUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-sm"
+                        style={{ textDecoration: 'none', background: 'rgba(26,127,204,0.15)', color: '#1A7FCC', border: '1px solid rgba(26,127,204,0.3)' }}
+                      >
+                        ↗ Drive
+                      </a>
                     ) : (
                       <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.2)' }}>—</span>
                     )}
