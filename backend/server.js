@@ -28,7 +28,20 @@ if (!fs.existsSync(SCHEDULES_FILE)) fs.writeJsonSync(SCHEDULES_FILE, []);
 if (!fs.existsSync(JOBS_FILE))      fs.writeJsonSync(JOBS_FILE, []);
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
-app.use(cors({ origin: 'http://localhost:3000' }));
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://millecube-ads-hub.vercel.app',
+  /https:\/\/millecube-ads-hub.*\.vercel\.app$/
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.some(o => typeof o === 'string' ? o === origin : o.test(origin))) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
 
