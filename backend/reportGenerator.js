@@ -8,9 +8,13 @@ const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   ImageRun, Header, Footer, AlignmentType, BorderStyle,
   WidthType, ShadingType, VerticalAlign, PageNumber, PageNumberElement,
-  TabStopType, UnderlineType
+  TabStopType, UnderlineType,
+  HorizontalPositionAlign, HorizontalPositionRelativeFrom,
+  VerticalPositionAlign, VerticalPositionRelativeFrom,
+  WrapType
 } = require('docx');
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const { createCanvas, loadImage } = require('canvas');
 const fs = require('fs-extra');
 const path = require('path');
 
@@ -512,18 +516,33 @@ function summaryTable(rows, headers, colWidths) {
   });
 }
 
-// ── Header Builder ─────────────────────────────────────────────────────────────
-function buildHeader() {
-  const logoPath = path.join(__dirname, 'assets', 'logo.png');
-  const hasLogo  = fs.existsSync(logoPath);
+// ── Watermark Builder ──────────────────────────────────────────────────────────
+async function buildWatermarkBuffer(logoPath) {
+  try {
+    const img = await loadImage(logoPath);
+    // Scale to 500px wide, maintain aspect ratio
+    const W = 500;
+    const H = Math.round(W * img.height / img.width);
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
+    ctx.globalAlpha = 0.5; // 50% transparency as requested
+    ctx.drawImage(img, 0, 0, W, H);
+    return canvas.toBuffer('image/png');
+  } catch (err) {
+    console.error('[WATERMARK] Failed to build watermark:', err.message);
+    return null;
+  }
+}
 
+// ── Header Builder ─────────────────────────────────────────────────────────────
+// logoBuffer and watermarkBuffer are pre-loaded in generate() to keep this fn sync
+function buildHeader(logoBuffer, watermarkBuffer) {
   let leftChildren;
-  if (hasLogo) {
-    const logoData = fs.readFileSync(logoPath);
+  if (logoBuffer) {
     leftChildren = [
       new Paragraph({
         spacing: { before: 0, after: 0 },
-        children: [new ImageRun({ data: logoData, type: 'png', transformation: { width: 110, height: 44 } })]
+        children: [new ImageRun({ data: logoBuffer, type: 'png', transformation: { width: 120, height: 48 } })]
       })
     ];
   } else {
@@ -569,7 +588,32 @@ function buildHeader() {
     children: [new TextRun('')]
   });
 
-  return new Header({ children: [table, divider] });
+  // Watermark: floating image centred on page, behind all content, 50% transparent
+  const headerChildren = [table, divider];
+  if (watermarkBuffer) {
+    headerChildren.push(new Paragraph({
+      children: [new ImageRun({
+        data: watermarkBuffer,
+        type: 'png',
+        transformation: { width: 380, height: 152 },
+        floating: {
+          horizontalPosition: {
+            align: HorizontalPositionAlign.CENTER,
+            relative: HorizontalPositionRelativeFrom.PAGE
+          },
+          verticalPosition: {
+            align: VerticalPositionAlign.CENTER,
+            relative: VerticalPositionRelativeFrom.PAGE
+          },
+          behindDocument: true,
+          allowOverlap: true,
+          wrap: { type: WrapType.NONE }
+        }
+      })]
+    }));
+  }
+
+  return new Header({ children: headerChildren });
 }
 
 // ── Footer Builder (no page number) ───────────────────────────────────────────
@@ -765,6 +809,11 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
     chart7a = await chartDonut(genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)), genders.map(g => tS > 0 ? +(g.spend / tS * 100).toFixed(1) : 0), 'Spend Split (%)', ['#E8A000','#1A7FCC','#32cd32']);
     chart7b = await chartDonut(genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)), genders.map(g => tR > 0 ? +(g.results / tR * 100).toFixed(1) : 0), 'Results Split (%)', ['#E8A000','#1A7FCC','#32cd32']);
   }
+
+  // ── Logo & Watermark ─────────────────────────────────────────────────────────
+  const logoPath = path.join(__dirname, 'assets', 'logo.png');
+  const logoBuffer      = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : null;
+  const watermarkBuffer = logoBuffer ? await buildWatermarkBuffer(logoPath) : null;
 
   // ── Build Document ───────────────────────────────────────────────────────────
   const generatedDate = new Date().toLocaleDateString('en-MY', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -1022,7 +1071,7 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
           margin: { top: PAGE.margin, right: PAGE.margin, bottom: PAGE.margin, left: PAGE.margin }
         }
       },
-      headers: { default: buildHeader() },
+      headers: { default: buildHeader(logoBuffer, watermarkBuffer) },
       footers: { default: buildFooter(client, periodLabel) },
       children
     }]
