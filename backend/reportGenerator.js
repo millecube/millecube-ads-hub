@@ -7,7 +7,7 @@
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   ImageRun, Header, Footer, AlignmentType, HeadingLevel, BorderStyle,
-  WidthType, ShadingType, VerticalAlign, LevelFormat, PageNumber,
+  WidthType, ShadingType, VerticalAlign, LevelFormat, PageNumber, PageNumberElement,
   TabStopType, TabStopPosition
 } = require('docx');
 const fs = require('fs-extra');
@@ -732,7 +732,7 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
             alignment: AlignmentType.CENTER,
             children: [
               new TextRun({ text: `${client.clientCode} — ${client.name}  ·  ${periodLabel}  ·  Millecube Digital  ·  Page `, size: 16, color: BRAND.midGrey, font: 'Calibri' }),
-              new PageNumber(),
+              new PageNumberElement({ type: PageNumber.CURRENT, size: 16, color: BRAND.midGrey, font: 'Calibri' }),
               new TextRun({ text: '  ·  CONFIDENTIAL', size: 16, color: BRAND.midGrey, font: 'Calibri' })
             ]
           })]
