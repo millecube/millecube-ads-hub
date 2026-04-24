@@ -1,7 +1,7 @@
 /**
- * Millecube Digital — Meta Ads Report Generator v2
- * Professional Word (.docx) report with embedded charts
- * Brand: #07503c headers | #32cd32 accents | #6bc71f secondary
+ * Millecube Digital — Meta Ads Report Generator v3
+ * Font: Montserrat | Professional header with company details | No footer page number
+ * Drop logo PNG at: backend/assets/logo.png  (optional — text fallback if missing)
  */
 
 const {
@@ -17,7 +17,7 @@ const path = require('path');
 // ── Brand ──────────────────────────────────────────────────────────────────────
 const BRAND = {
   darkGreen:  '07503c',
-  green:      '32cd32',
+  green:      '32cd32',   // leaf green — used for highlighted numbers
   lightGreen: '6bc71f',
   amber:      'E8A000',
   blue:       '1A7FCC',
@@ -28,6 +28,8 @@ const BRAND = {
   borderGrey: 'DDDDDD',
 };
 
+const FONT = 'Montserrat';
+
 const PAGE = {
   width:  11906,
   height: 16838,
@@ -35,37 +37,36 @@ const PAGE = {
   get content() { return this.width - this.margin * 2; }
 };
 
-// Malaysia benchmarks
 const BENCH = { ctrLow: 0.8, ctrHigh: 2.5, ctrStrong: 2.0, cpmLow: 5, cpmHigh: 25, cpcLow: 0.30, cpcHigh: 2.50 };
+
+const COMPANY = {
+  name:    'Millecube Digital',
+  entity:  'CADOO VENTURE SDN. BHD. 202301026716 (1520639-D)',
+  address: '2-5-9, Harbour Trade Centre, Gat Lebuh Macallum,',
+  city:    '10300, Georgetown, Pulau Pinang, Malaysia',
+  tel:     '+016 496 3875',
+  email:   'hello@millecube.com',
+};
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 const fmtRM  = v => `RM ${parseFloat(v || 0).toFixed(2)}`;
 const fmtNum = v => Math.round(parseFloat(v || 0)).toLocaleString('en-MY');
 const fmtPct = v => `${parseFloat(v || 0).toFixed(2)}%`;
-const fmtX   = (v, bench) => v >= bench ? `${(v / bench).toFixed(1)}x above benchmark` : `Below ${bench}% benchmark`;
 
 // ── Chart Generator ────────────────────────────────────────────────────────────
-const chartCanvas = new ChartJSNodeCanvas({ width: 700, height: 320, backgroundColour: 'white' });
-const chartCanvasTall = new ChartJSNodeCanvas({ width: 700, height: 380, backgroundColour: 'white' });
+const chartCanvas      = new ChartJSNodeCanvas({ width: 700, height: 320, backgroundColour: 'white' });
+const chartCanvasTall  = new ChartJSNodeCanvas({ width: 700, height: 380, backgroundColour: 'white' });
 const chartCanvasSquare = new ChartJSNodeCanvas({ width: 700, height: 340, backgroundColour: 'white' });
 
 async function chartHBar(labels, values, title, color = '#E8A000', valuePrefix = 'RM ') {
   return chartCanvas.renderToBuffer({
     type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        data: values,
-        backgroundColor: color,
-        borderRadius: 4,
-      }]
-    },
+    data: { labels, datasets: [{ data: values, backgroundColor: color, borderRadius: 4 }] },
     options: {
       indexAxis: 'y',
       plugins: {
-        title: { display: true, text: title, font: { size: 13, weight: 'bold' }, color: '#07503c', padding: { bottom: 12 } },
-        legend: { display: false },
-        datalabels: false
+        title: { display: true, text: title, font: { size: 13, weight: 'bold', family: 'sans-serif' }, color: '#07503c', padding: { bottom: 12 } },
+        legend: { display: false }
       },
       scales: {
         x: { grid: { color: '#eeeeee' }, ticks: { callback: v => `${valuePrefix}${Number(v).toLocaleString()}` } },
@@ -112,13 +113,10 @@ async function chartGroupedBar(labels, datasets, title) {
 }
 
 async function chartDonut(labels, values, title, colors) {
-  const squareCanvas = new ChartJSNodeCanvas({ width: 340, height: 280, backgroundColour: 'white' });
-  return squareCanvas.renderToBuffer({
+  const c = new ChartJSNodeCanvas({ width: 340, height: 280, backgroundColour: 'white' });
+  return c.renderToBuffer({
     type: 'doughnut',
-    data: {
-      labels,
-      datasets: [{ data: values, backgroundColor: colors, borderWidth: 2 }]
-    },
+    data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 2 }] },
     options: {
       plugins: {
         title: { display: true, text: title, font: { size: 12, weight: 'bold' }, color: '#07503c' },
@@ -146,8 +144,8 @@ async function chartBarLine(labels, barData, lineData, barLabel, lineLabel, titl
       },
       scales: {
         x: { grid: { display: false } },
-        y: { position: 'left', grid: { color: '#eeeeee' }, beginAtZero: true, title: { display: true, text: barLabel } },
-        y1: { position: 'right', grid: { display: false }, beginAtZero: true, title: { display: true, text: lineLabel } }
+        y:  { position: 'left',  grid: { color: '#eeeeee' }, beginAtZero: true, title: { display: true, text: barLabel } },
+        y1: { position: 'right', grid: { display: false },   beginAtZero: true, title: { display: true, text: lineLabel } }
       }
     }
   });
@@ -166,21 +164,21 @@ function getCampaignGoal(name, patterns) {
     if (n.includes((pattern || '').toUpperCase())) return goal;
   }
   if (n.includes('ENG POST') || n.includes('POST BOOST') || n.includes('I POST')) return 'post_engagement';
-  if (n.includes('FOLLOW') || n.includes('LIKE'))  return 'page_likes';
+  if (n.includes('FOLLOW') || n.includes('LIKE'))   return 'page_likes';
   if (n.includes('AWARENESS') || n.includes('BRAND')) return 'reach';
-  if (n.includes('LEAD')) return 'leads';
+  if (n.includes('LEAD'))                            return 'leads';
   if (n.includes('ENG') || n.includes('MSG') || n.includes('WA')) return 'whatsapp';
   return 'whatsapp';
 }
 
 function getPrimaryResult(c) {
   switch (c.goal) {
-    case 'whatsapp':      return { label: 'WA Replies',     count: c.waConvos,       cpr: c.waConvos > 0 ? c.spend / c.waConvos : 0 };
+    case 'whatsapp':        return { label: 'WA Replies',   count: c.waConvos,        cpr: c.waConvos > 0        ? c.spend / c.waConvos : 0 };
     case 'post_engagement': return { label: 'Engagements',  count: c.postEngagements, cpr: c.postEngagements > 0 ? c.spend / c.postEngagements : 0 };
-    case 'page_likes':    return { label: 'Page Likes',     count: c.pageLikes,       cpr: c.pageLikes > 0 ? c.spend / c.pageLikes : 0 };
-    case 'reach':         return { label: 'Reach',          count: c.reach,           cpr: c.impressions > 0 ? c.spend / c.impressions * 1000 : 0 };
-    case 'leads':         return { label: 'Leads',          count: c.leads,           cpr: c.leads > 0 ? c.spend / c.leads : 0 };
-    default:              return { label: 'Results',        count: 0,                 cpr: 0 };
+    case 'page_likes':      return { label: 'Page Likes',   count: c.pageLikes,       cpr: c.pageLikes > 0       ? c.spend / c.pageLikes : 0 };
+    case 'reach':           return { label: 'Reach',        count: c.reach,           cpr: c.impressions > 0     ? c.spend / c.impressions * 1000 : 0 };
+    case 'leads':           return { label: 'Leads',        count: c.leads,           cpr: c.leads > 0           ? c.spend / c.leads : 0 };
+    default:                return { label: 'Results',      count: 0,                 cpr: 0 };
   }
 }
 
@@ -188,7 +186,6 @@ function processData(rawData, client) {
   const { platformDay, ageGender } = rawData;
   const goalPatterns = client.campaignGoals || [];
 
-  // Campaigns
   const campaignMap = {};
   for (const row of platformDay) {
     const key = row.campaign_name;
@@ -228,7 +225,6 @@ function processData(rawData, client) {
     get primaryResult() { return getPrimaryResult(this); }
   }));
 
-  // Totals
   const totals = campaigns.reduce((acc, c) => {
     acc.spend += c.spend; acc.reach += c.reach; acc.impressions += c.impressions;
     acc.clicks += c.clicks; acc.waConvos += c.waConvos; acc.postEngagements += c.postEngagements;
@@ -241,7 +237,6 @@ function processData(rawData, client) {
   totals.totalResults = campaigns.reduce((s, c) => s + c.primaryResult.count, 0);
   totals.avgCPR = totals.totalResults > 0 ? totals.spend / totals.totalResults : 0;
 
-  // Platforms
   const platformMap = {};
   for (const row of platformDay) {
     const key = row.publisher_platform || 'unknown';
@@ -261,7 +256,6 @@ function processData(rawData, client) {
     cpr: p.results > 0 ? p.spend / p.results : 0
   }));
 
-  // Daily
   const dailyMap = {};
   for (const row of platformDay) {
     const day = row.date_start; if (!day) continue;
@@ -273,7 +267,6 @@ function processData(rawData, client) {
   }
   const daily = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
 
-  // Age
   const ageMap = {};
   for (const row of ageGender) {
     const age = row.age; if (!age || age === 'unknown') continue;
@@ -290,7 +283,6 @@ function processData(rawData, client) {
     .map(a => ({ ...a, ctr: a.impressions > 0 ? a.clicks / a.impressions * 100 : 0, cpr: a.results > 0 ? a.spend / a.results : 0 }))
     .sort((a, b) => AGE_ORDER.indexOf(a.age) - AGE_ORDER.indexOf(b.age));
 
-  // Gender
   const genderMap = {};
   for (const row of ageGender) {
     const g = row.gender; if (!g || g === 'unknown') continue;
@@ -314,7 +306,37 @@ function processData(rawData, client) {
   return { campaigns, totals, platforms, daily, ages, genders, hasVideo, hasEngagement };
 }
 
+// ── Text Helpers ───────────────────────────────────────────────────────────────
+
+// Splits text into TextRun array, highlighting numbers/RM values/percentages in leaf green+bold
+function highlightText(text, size = 19, baseColor = '444444') {
+  // Matches: RM 1,234.56 | 2.34% | 1,234 (comma-formatted) | 2.5x | 50+
+  const pattern = /RM\s[\d,]+\.?\d*|\d+\.?\d*%|\d{1,3}(?:,\d{3})+\+?|\d+\.?\d*x/g;
+  const runs = [];
+  let last = 0;
+  for (const m of text.matchAll(pattern)) {
+    if (m.index > last) {
+      runs.push(new TextRun({ text: text.slice(last, m.index), size, color: baseColor, font: FONT }));
+    }
+    runs.push(new TextRun({ text: m[0], size, color: BRAND.green, bold: true, font: FONT }));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    runs.push(new TextRun({ text: text.slice(last), size, color: baseColor, font: FONT }));
+  }
+  return runs.length > 0 ? runs : [new TextRun({ text, size, color: baseColor, font: FONT })];
+}
+
 // ── Document Helpers ───────────────────────────────────────────────────────────
+const noB = {
+  borders: {
+    top:    { style: BorderStyle.NONE },
+    bottom: { style: BorderStyle.NONE },
+    left:   { style: BorderStyle.NONE },
+    right:  { style: BorderStyle.NONE }
+  }
+};
+
 function border(color = BRAND.borderGrey) {
   const b = { style: BorderStyle.SINGLE, size: 1, color };
   return { top: b, bottom: b, left: b, right: b };
@@ -323,9 +345,9 @@ function border(color = BRAND.borderGrey) {
 function cell(text, opts = {}) {
   const runs = Array.isArray(text)
     ? text
-    : [new TextRun({ text: String(text ?? ''), bold: !!opts.bold, color: opts.color || BRAND.black, size: opts.size || 18, font: 'Calibri', italics: opts.italic })];
+    : [new TextRun({ text: String(text ?? ''), bold: !!opts.bold, color: opts.color || BRAND.black, size: opts.size || 17, font: FONT, italics: opts.italic })];
   return new TableCell({
-    borders: opts.noBorder ? { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } : border(opts.borderColor),
+    borders: opts.noBorder ? noB.borders : border(opts.borderColor),
     width: opts.width ? { size: opts.width, type: WidthType.DXA } : undefined,
     shading: opts.bg ? { fill: opts.bg, type: ShadingType.CLEAR } : undefined,
     verticalAlign: opts.vAlign || VerticalAlign.CENTER,
@@ -340,20 +362,34 @@ function heading(text, level = 1) {
     return new Paragraph({
       spacing: { before: 400, after: 160 },
       border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: BRAND.green, space: 6 } },
-      children: [new TextRun({ text, bold: true, size: 34, color: BRAND.darkGreen, font: 'Calibri' })]
+      children: [new TextRun({ text, bold: true, size: 32, color: BRAND.darkGreen, font: FONT })]
     });
   }
   return new Paragraph({
     spacing: { before: 240, after: 120 },
-    children: [new TextRun({ text, bold: true, size: 24, color: BRAND.amber, font: 'Calibri' })]
+    children: [new TextRun({ text, bold: true, size: 22, color: BRAND.amber, font: FONT })]
   });
 }
 
 function para(text, opts = {}) {
+  const children = opts.plain
+    ? [new TextRun({ text, size: opts.size || 19, color: opts.color || '444444', bold: opts.bold, italics: opts.italic, font: FONT })]
+    : highlightText(text, opts.size || 19, opts.color || '444444');
+
+  if (opts.italic && !opts.plain) {
+    // italics on top of highlighted — apply italics to all runs
+    children.forEach(r => { r.options = r.options || {}; });
+    return new Paragraph({
+      spacing: { before: opts.before ?? 80, after: opts.after ?? 100 },
+      alignment: opts.align,
+      children: children.map(r => new TextRun({ ...r._root?.children?.[0]?.root?.children?.[0] || {}, italics: true }))
+    });
+  }
+
   return new Paragraph({
     spacing: { before: opts.before ?? 80, after: opts.after ?? 100 },
     alignment: opts.align,
-    children: [new TextRun({ text, size: opts.size || 19, color: opts.color || '333333', bold: opts.bold, italics: opts.italic, font: 'Calibri' })]
+    children
   });
 }
 
@@ -381,9 +417,9 @@ function kpiTable(kpis) {
         margins: { top: 200, bottom: 200, left: 180, right: 180 },
         verticalAlign: VerticalAlign.CENTER,
         children: [
-          new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 60 }, children: [new TextRun({ text: k.value, bold: true, size: 34, color: BRAND.green, font: 'Calibri' })] }),
-          new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 40 }, children: [new TextRun({ text: k.label, size: 16, color: 'aaddaa', font: 'Calibri' })] }),
-          ...(k.sub ? [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [new TextRun({ text: k.sub, size: 14, color: 'aaddaa', font: 'Calibri', italics: true })] })] : [])
+          new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 60 },  children: [new TextRun({ text: k.value, bold: true, size: 32, color: BRAND.green,    font: FONT })] }),
+          new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 40 },  children: [new TextRun({ text: k.label, size: 16, color: 'aaddaa', font: FONT })] }),
+          ...(k.sub ? [new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 }, children: [new TextRun({ text: k.sub, size: 14, color: 'aaddaa', font: FONT, italics: true })] })] : [])
         ]
       }))
     })]
@@ -393,7 +429,8 @@ function kpiTable(kpis) {
 function insightCard(emoji, title, body, color = BRAND.amber) {
   const bgMap = { [BRAND.amber]: 'FFF8E8', [BRAND.darkGreen]: 'E8F5E9', 'cc3333': 'FFF0F0', '555588': 'F0F0FF' };
   const bg = bgMap[color] || 'F9F9F9';
-  const cols = [400, PAGE.content - 400];
+  const titleColor = color === BRAND.amber ? '7A4800' : color === BRAND.darkGreen ? BRAND.darkGreen : color;
+  const cols = [420, PAGE.content - 420];
   return [
     new Table({
       width: { size: PAGE.content, type: WidthType.DXA },
@@ -403,18 +440,18 @@ function insightCard(emoji, title, body, color = BRAND.amber) {
           borders: border(color),
           width: { size: cols[0], type: WidthType.DXA },
           shading: { fill: color, type: ShadingType.CLEAR },
-          margins: { top: 120, bottom: 120, left: 100, right: 100 },
+          margins: { top: 140, bottom: 140, left: 100, right: 100 },
           verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: emoji, size: 28, font: 'Calibri' })] })]
+          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: emoji, size: 28, font: FONT })] })]
         }),
         new TableCell({
           borders: { top: border(color).top, bottom: border(color).bottom, right: border(color).right, left: { style: BorderStyle.NONE } },
           width: { size: cols[1], type: WidthType.DXA },
           shading: { fill: bg, type: ShadingType.CLEAR },
-          margins: { top: 120, bottom: 120, left: 160, right: 160 },
+          margins: { top: 140, bottom: 140, left: 180, right: 180 },
           children: [
-            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: title, bold: true, size: 20, color: color === BRAND.amber ? '7A4800' : BRAND.darkGreen, font: 'Calibri' })] }),
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: body, size: 18, color: '444444', font: 'Calibri' })] })
+            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: title, bold: true, size: 19, color: titleColor, font: FONT })] }),
+            new Paragraph({ spacing: { before: 0, after: 0 }, children: highlightText(body, 17, '444444') })
           ]
         })
       ]})]
@@ -424,7 +461,7 @@ function insightCard(emoji, title, body, color = BRAND.amber) {
 }
 
 function recCard(num, title, why, impact) {
-  const cols = [600, PAGE.content - 600];
+  const cols = [560, PAGE.content - 560];
   return [
     new Table({
       width: { size: PAGE.content, type: WidthType.DXA },
@@ -436,17 +473,17 @@ function recCard(num, title, why, impact) {
           shading: { fill: BRAND.amber, type: ShadingType.CLEAR },
           margins: { top: 140, bottom: 140, left: 120, right: 120 },
           verticalAlign: VerticalAlign.CENTER,
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(num), bold: true, size: 36, color: BRAND.white, font: 'Calibri' })] })]
+          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: String(num), bold: true, size: 36, color: BRAND.white, font: FONT })] })]
         }),
         new TableCell({
           borders: { top: border(BRAND.amber).top, bottom: border(BRAND.amber).bottom, right: border(BRAND.amber).right, left: { style: BorderStyle.NONE } },
           width: { size: cols[1], type: WidthType.DXA },
           shading: { fill: 'FFF8E8', type: ShadingType.CLEAR },
-          margins: { top: 140, bottom: 140, left: 180, right: 180 },
+          margins: { top: 140, bottom: 140, left: 200, right: 180 },
           children: [
-            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: title, bold: true, size: 20, color: BRAND.darkGreen, font: 'Calibri' })] }),
-            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: `Why: ${why}`, size: 18, color: '555555', font: 'Calibri' })] }),
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: `Expected: ${impact}`, size: 18, color: BRAND.lightGreen, font: 'Calibri' })] })
+            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: title, bold: true, size: 19, color: BRAND.darkGreen, font: FONT })] }),
+            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: 'Why: ', bold: true, size: 17, color: '555555', font: FONT }), ...highlightText(why, 17, '555555')] }),
+            new Paragraph({ spacing: { before: 0, after: 0 },  children: [new TextRun({ text: 'Expected: ', bold: true, size: 17, color: BRAND.lightGreen, font: FONT }), ...highlightText(impact, 17, '555555')] })
           ]
         })
       ]})]
@@ -461,35 +498,108 @@ function summaryTable(rows, headers, colWidths) {
     width: { size: totalW, type: WidthType.DXA },
     columnWidths: colWidths,
     rows: [
-      new TableRow({ tableHeader: true, children: headers.map((h, i) => cell(h, { bg: BRAND.darkGreen, color: BRAND.white, bold: true, width: colWidths[i], align: i > 0 ? AlignmentType.RIGHT : AlignmentType.LEFT })) }),
+      new TableRow({ tableHeader: true, children: headers.map((h, i) => cell(h, { bg: BRAND.darkGreen, color: BRAND.white, bold: true, width: colWidths[i], align: i > 0 ? AlignmentType.RIGHT : AlignmentType.LEFT, size: 16 })) }),
       ...rows.map((row, ri) => new TableRow({
         children: row.map((v, i) => cell(v, {
           width: colWidths[i],
           align: i > 0 ? AlignmentType.RIGHT : AlignmentType.LEFT,
           bg: ri % 2 === 1 ? BRAND.lightGrey : BRAND.white,
-          bold: row[0] === 'TOTAL' || row[0] === 'Total / Avg'
+          bold: row[0] === 'TOTAL' || row[0] === 'TOTAL / AVG' || row[0] === 'Total / Avg',
+          size: 16
         }))
       }))
     ]
   });
 }
 
+// ── Header Builder ─────────────────────────────────────────────────────────────
+function buildHeader() {
+  const logoPath = path.join(__dirname, 'assets', 'logo.png');
+  const hasLogo  = fs.existsSync(logoPath);
+
+  let leftChildren;
+  if (hasLogo) {
+    const logoData = fs.readFileSync(logoPath);
+    leftChildren = [
+      new Paragraph({
+        spacing: { before: 0, after: 0 },
+        children: [new ImageRun({ data: logoData, type: 'png', transformation: { width: 110, height: 44 } })]
+      })
+    ];
+  } else {
+    leftChildren = [
+      new Paragraph({ spacing: { before: 0, after: 0 },
+        children: [new TextRun({ text: 'MILLECUBE', bold: true, size: 22, color: BRAND.darkGreen, font: FONT })] }),
+      new Paragraph({ spacing: { before: 0, after: 0 },
+        children: [new TextRun({ text: 'DIGITAL', bold: true, size: 14, color: BRAND.green, font: FONT })] }),
+    ];
+  }
+
+  const rightChildren = [
+    new Paragraph({ spacing: { before: 0, after: 20 }, alignment: AlignmentType.RIGHT,
+      children: [new TextRun({ text: COMPANY.name, bold: true, size: 18, color: BRAND.darkGreen, font: FONT })] }),
+    new Paragraph({ spacing: { before: 0, after: 20 }, alignment: AlignmentType.RIGHT,
+      children: [new TextRun({ text: COMPANY.entity, size: 13, color: '888888', font: FONT })] }),
+    new Paragraph({ spacing: { before: 0, after: 20 }, alignment: AlignmentType.RIGHT,
+      children: [new TextRun({ text: `${COMPANY.address}`, size: 13, color: '888888', font: FONT })] }),
+    new Paragraph({ spacing: { before: 0, after: 20 }, alignment: AlignmentType.RIGHT,
+      children: [new TextRun({ text: COMPANY.city, size: 13, color: '888888', font: FONT })] }),
+    new Paragraph({ spacing: { before: 0, after: 0 }, alignment: AlignmentType.RIGHT,
+      children: [
+        new TextRun({ text: `Tel: ${COMPANY.tel}`, size: 13, color: '888888', font: FONT }),
+        new TextRun({ text: '     Email: ', size: 13, color: '888888', font: FONT }),
+        new TextRun({ text: COMPANY.email, size: 13, color: BRAND.darkGreen, bold: true, font: FONT }),
+      ]}),
+  ];
+
+  const table = new Table({
+    width: { size: PAGE.content, type: WidthType.DXA },
+    columnWidths: [1800, PAGE.content - 1800],
+    rows: [new TableRow({ children: [
+      new TableCell({ ...noB, width: { size: 1800, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+        margins: { top: 60, bottom: 60, left: 0, right: 200 }, children: leftChildren }),
+      new TableCell({ ...noB, width: { size: PAGE.content - 1800, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+        margins: { top: 60, bottom: 60, left: 200, right: 0 }, children: rightChildren }),
+    ]})]
+  });
+
+  const divider = new Paragraph({
+    spacing: { before: 100, after: 0 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: BRAND.green, space: 0 } },
+    children: [new TextRun('')]
+  });
+
+  return new Header({ children: [table, divider] });
+}
+
+// ── Footer Builder (no page number) ───────────────────────────────────────────
+function buildFooter(client, periodLabel) {
+  return new Footer({ children: [
+    new Paragraph({
+      border: { top: { style: BorderStyle.SINGLE, size: 6, color: BRAND.green, space: 4 } },
+      spacing: { before: 80, after: 0 },
+      tabStops: [{ type: TabStopType.RIGHT, position: PAGE.content }],
+      children: [
+        new TextRun({ text: `${client.name}  ·  Meta Ads Report  ·  ${periodLabel}`, size: 15, color: BRAND.midGrey, font: FONT }),
+        new TextRun({ text: '\tConfidential  ·  Millecube Digital', size: 15, color: BRAND.midGrey, font: FONT, italics: true }),
+      ]
+    })
+  ]});
+}
+
 // ── Insights & Recommendations ─────────────────────────────────────────────────
 function generateInsights(data) {
-  const { campaigns, totals, platforms, ages, genders, daily } = data;
+  const { campaigns, totals, platforms, ages, daily } = data;
   const cards = [];
 
-  // 1. CTR performance
   const avgCTR = totals.ctr;
-  const ctrStatus = avgCTR >= BENCH.ctrStrong ? `✅` : avgCTR >= BENCH.ctrLow ? `✅` : `⚠️`;
   const ctrNote = avgCTR >= BENCH.ctrStrong
     ? `${fmtPct(avgCTR)} — ${(avgCTR / BENCH.ctrLow).toFixed(1)}x above the Malaysia benchmark of ${BENCH.ctrLow}–${BENCH.ctrHigh}%. Audience targeting and creative messaging are highly aligned. Maintain current strategy.`
     : avgCTR >= BENCH.ctrLow
     ? `${fmtPct(avgCTR)} — within the Malaysia benchmark of ${BENCH.ctrLow}–${BENCH.ctrHigh}%. Performance is on track. There is room to push CTR higher by testing stronger creative hooks.`
     : `${fmtPct(avgCTR)} — below the Malaysia benchmark of ${BENCH.ctrLow}%. Ad copy or targeting may need refreshing. Run A/B tests on headlines and visuals to improve click-through.`;
-  cards.push({ emoji: ctrStatus, title: `CTR Performance: ${fmtPct(avgCTR)}`, body: `Overall CTR is ${ctrNote}`, color: avgCTR >= BENCH.ctrLow ? BRAND.darkGreen : 'cc3333' });
+  cards.push({ emoji: avgCTR >= BENCH.ctrLow ? '✅' : '⚠️', title: `CTR Performance: ${fmtPct(avgCTR)}`, body: `Overall CTR is ${ctrNote}`, color: avgCTR >= BENCH.ctrLow ? BRAND.darkGreen : 'cc3333' });
 
-  // 2. Best campaign
   const best = [...campaigns].sort((a, b) => b.primaryResult.count - a.primaryResult.count)[0];
   if (best) {
     cards.push({
@@ -500,37 +610,34 @@ function generateInsights(data) {
     });
   }
 
-  // 3. Underperformer
   const underperformers = campaigns.filter(c => c.ctr < BENCH.ctrLow && c.spend > 0);
   if (underperformers.length > 0) {
     const u = underperformers[0];
     cards.push({
       emoji: '⚠️',
       title: `Creative Fatigue Signal: ${u.name}`,
-      body: `CTR of ${fmtPct(u.ctr)} is below the ${BENCH.ctrLow}% Malaysia benchmark. This is a signal of creative fatigue or audience mismatch. Introduce 2–3 new creative variants and test against current ads before the next reporting period.`,
+      body: `CTR of ${fmtPct(u.ctr)} is below the ${BENCH.ctrLow}% Malaysia benchmark. This signals creative fatigue or audience mismatch. Introduce 2–3 new creative variants and test against current ads before the next reporting period.`,
       color: 'cc3333'
     });
   }
 
-  // 4. Platform signal
   const fb = platforms.find(p => p.platform === 'facebook');
   const ig = platforms.find(p => p.platform === 'instagram');
   if (fb && ig) {
     const leader = fb.results >= ig.results ? fb : ig;
     const other  = fb.results >= ig.results ? ig : fb;
-    const leaderName = leader.platform === 'facebook' ? 'Facebook' : 'Instagram';
-    const otherName  = other.platform  === 'facebook' ? 'Facebook' : 'Instagram';
+    const lName  = leader.platform === 'facebook' ? 'Facebook' : 'Instagram';
+    const oName  = other.platform  === 'facebook' ? 'Facebook' : 'Instagram';
     cards.push({
       emoji: '📊',
-      title: `Platform Signal: ${leaderName} Leads`,
-      body: `${leaderName} delivered ${fmtNum(leader.results)} results at ${fmtRM(leader.cpr)} CPR vs ${otherName}'s ${fmtNum(other.results)} results at ${fmtRM(other.cpr)} CPR. ${leaderName} CTR of ${fmtPct(leader.ctr)} ${leader.ctr > other.ctr ? 'significantly outperforms' : 'is comparable to'} ${otherName}. Current budget split aligns with performance — maintain ${leaderName} as primary platform.`,
+      title: `Platform Signal: ${lName} Leads`,
+      body: `${lName} delivered ${fmtNum(leader.results)} results at ${fmtRM(leader.cpr)} CPR vs ${oName}'s ${fmtNum(other.results)} results at ${fmtRM(other.cpr)} CPR. ${lName} CTR of ${fmtPct(leader.ctr)} ${leader.ctr > other.ctr ? 'significantly outperforms' : 'is comparable to'} ${oName}. Current budget split aligns with performance.`,
       color: BRAND.darkGreen
     });
   }
 
-  // 5. Best age group
   if (ages.length > 0) {
-    const bestAge = [...ages].sort((a, b) => b.results - a.results)[0];
+    const bestAge  = [...ages].sort((a, b) => b.results - a.results)[0];
     const cheapAge = [...ages].filter(a => a.cpr > 0).sort((a, b) => a.cpr - b.cpr)[0];
     if (bestAge) {
       const note = cheapAge && cheapAge.age !== bestAge.age
@@ -539,15 +646,14 @@ function generateInsights(data) {
       cards.push({
         emoji: '💡',
         title: `Best Audience: ${bestAge.age} Age Group`,
-        body: `The ${bestAge.age} group drove the most results (${fmtNum(bestAge.results)}) at ${fmtRM(bestAge.cpr)} per result with a ${fmtPct(bestAge.ctr)} CTR. These are likely the core buyer segment. All content should speak directly to this age group's priorities.${note}`,
+        body: `The ${bestAge.age} group drove the most results (${fmtNum(bestAge.results)}) at ${fmtRM(bestAge.cpr)} per result with a ${fmtPct(bestAge.ctr)} CTR. These are the core buyer segment. All content should speak directly to this age group's priorities.${note}`,
         color: BRAND.amber
       });
     }
   }
 
-  // 6. Daily trend observation
   if (daily.length > 0) {
-    const peakDay = daily.reduce((a, b) => b.results > a.results ? b : a, daily[0]);
+    const peakDay  = daily.reduce((a, b) => b.results > a.results ? b : a, daily[0]);
     const avgSpend = totals.spend / daily.length;
     cards.push({
       emoji: '📈',
@@ -564,15 +670,13 @@ function generateRecommendations(data) {
   const { campaigns, totals, platforms, ages } = data;
   const recs = [];
 
-  // 1. Scale best campaign
   const best = [...campaigns].sort((a, b) => b.primaryResult.count - a.primaryResult.count)[0];
   if (best) recs.push({
     title: `Scale Budget on ${best.name}`,
     why: `This campaign delivered the most results at a competitive CPR of ${fmtRM(best.primaryResult.cpr)}. It has proven creative-audience fit and is ready for budget scaling without significant CPR increase.`,
-    impact: `10–20% budget increase can generate proportional result growth while staying within efficient CPR range.`
+    impact: `A 10–20% budget increase can generate proportional result growth while staying within an efficient CPR range.`
   });
 
-  // 2. Creative refresh
   const lowCTR = campaigns.filter(c => c.ctr < BENCH.ctrLow && c.spend > 50);
   if (lowCTR.length > 0) recs.push({
     title: `Refresh Creatives on ${lowCTR.map(c => c.name).join(', ')}`,
@@ -580,7 +684,6 @@ function generateRecommendations(data) {
     impact: `New creative typically recovers CTR within 5–7 days of launch. Target CTR above ${BENCH.ctrHigh}% for this account profile.`
   });
 
-  // 3. Budget allocation
   const fb = platforms.find(p => p.platform === 'facebook');
   const ig = platforms.find(p => p.platform === 'instagram');
   if (fb && ig && ig.spend > 0) {
@@ -592,7 +695,6 @@ function generateRecommendations(data) {
     });
   }
 
-  // 4. Audience targeting
   if (ages.length > 0) {
     const topAges = [...ages].sort((a, b) => b.results - a.results).slice(0, 2);
     if (topAges.length >= 2) recs.push({
@@ -602,19 +704,17 @@ function generateRecommendations(data) {
     });
   }
 
-  // 5. Monthly consistency
   recs.push({
     title: 'Maintain Consistent Monthly Ad Activity',
     why: `Meta's delivery algorithm requires time to exit the learning phase (typically 50+ optimisation events). Pausing and restarting campaigns resets this learning, increasing CPR temporarily each time.`,
     impact: `Continuous campaigns typically achieve 15–30% lower CPR vs on-off campaigns of the same total budget over a quarter.`
   });
 
-  // 6. Retargeting
   const hasWA = campaigns.some(c => c.waConvos > 0);
   if (hasWA) recs.push({
     title: 'Add a Retargeting Layer for Warm Audiences',
     why: `People who have already clicked or engaged with ads are significantly more likely to convert. A retargeting campaign targeting website visitors and video viewers runs at 30–50% lower CPR than cold audience campaigns.`,
-    impact: `Expected CPR reduction of 30–50% for retargeting campaigns. Small budget (RM 200–400/month) with high conversion efficiency.`
+    impact: `Expected CPR reduction of 30–50%. A small monthly budget of RM 200–400 can drive high-efficiency conversions from warm audiences.`
   });
 
   return recs;
@@ -625,104 +725,61 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
   const data = processData(rawData, client);
   const { campaigns, totals, platforms, daily, ages, genders, hasVideo, hasEngagement } = data;
   const insights = generateInsights(data);
-  const recs = generateRecommendations(data);
-  const primaryColor = `#${(client.primaryColour || BRAND.amber).replace('#', '')}`;
-  const secondaryColor = `#${(client.secondaryColour || BRAND.blue).replace('#', '')}`;
+  const recs     = generateRecommendations(data);
+  const primaryColor   = `#${(client.primaryColor   || BRAND.amber).replace('#', '')}`;
+  const secondaryColor = `#${(client.secondaryColor || BRAND.blue ).replace('#', '')}`;
 
-  // ── Generate Charts ──────────────────────────────────────────────────────────
   const shortName = n => n.length > 22 ? n.substring(0, 20) + '…' : n;
 
-  // Chart 1: Spend by Campaign
-  const chart1 = await chartHBar(
-    campaigns.map(c => shortName(c.name)),
-    campaigns.map(c => c.spend),
-    `Spend by Campaign — ${periodLabel}`,
-    primaryColor, 'RM '
-  );
+  // ── Charts ──────────────────────────────────────────────────────────────────
+  const chart1 = await chartHBar(campaigns.map(c => shortName(c.name)), campaigns.map(c => c.spend),              `Spend by Campaign — ${periodLabel}`, primaryColor, 'RM ');
+  const chart2 = await chartHBar(campaigns.map(c => shortName(c.name)), campaigns.map(c => c.primaryResult.count), `Primary Results by Campaign — ${periodLabel}`, secondaryColor, '');
 
-  // Chart 2: Primary Results by Campaign
-  const chart2 = await chartHBar(
-    campaigns.map(c => shortName(c.name)),
-    campaigns.map(c => c.primaryResult.count),
-    `Primary Results by Campaign — ${periodLabel}`,
-    secondaryColor, ''
-  );
-
-  // Chart 3: Daily Spend Trend
   let chart3 = null, chart4 = null;
   if (daily.length > 1) {
-    chart3 = await chartLine(
-      daily.map(d => d.date.substring(5)),
+    chart3 = await chartLine(daily.map(d => d.date.substring(5)),
       [{ label: 'Daily Spend (RM)', data: daily.map(d => d.spend), borderColor: primaryColor, backgroundColor: `${primaryColor}30`, fill: true, tension: 0.3, pointRadius: 2 }],
-      `Daily Spend Trend — ${periodLabel}`
-    );
-    chart4 = await chartLine(
-      daily.map(d => d.date.substring(5)),
+      `Daily Spend Trend — ${periodLabel}`);
+    chart4 = await chartLine(daily.map(d => d.date.substring(5)),
       [{ label: 'Daily Results', data: daily.map(d => d.results), borderColor: secondaryColor, backgroundColor: `${secondaryColor}30`, fill: true, tension: 0.3, pointRadius: 2 }],
-      `Daily Results Trend — ${periodLabel}`
-    );
+      `Daily Results Trend — ${periodLabel}`);
   }
 
-  // Chart 5: Platform Split
   let chart5 = null;
   if (platforms.length >= 2) {
     chart5 = await chartGroupedBar(
       platforms.map(p => p.platform.charAt(0).toUpperCase() + p.platform.slice(1)),
-      [
-        { label: 'Spend (RM)', data: platforms.map(p => p.spend), backgroundColor: primaryColor },
-        { label: 'Results', data: platforms.map(p => p.results), backgroundColor: secondaryColor }
-      ],
-      `Platform Split — Spend & Results`
-    );
+      [{ label: 'Spend (RM)', data: platforms.map(p => p.spend), backgroundColor: primaryColor }, { label: 'Results', data: platforms.map(p => p.results), backgroundColor: secondaryColor }],
+      `Platform Split — Spend & Results`);
   }
 
-  // Chart 6: Age Group Bar+Line
   let chart6 = null;
   if (ages.length > 0) {
-    chart6 = await chartBarLine(
-      ages.map(a => a.age),
-      ages.map(a => a.results),
-      ages.map(a => a.ctr),
-      'Results', 'CTR (%)',
-      `Age Group — Results & CTR`
-    );
+    chart6 = await chartBarLine(ages.map(a => a.age), ages.map(a => a.results), ages.map(a => a.ctr), 'Results', 'CTR (%)', `Age Group — Results & CTR`);
   }
 
-  // Chart 7: Gender Donuts
   let chart7a = null, chart7b = null;
   if (genders.length >= 2) {
-    const totalSpend   = genders.reduce((s, g) => s + g.spend, 0);
-    const totalResults = genders.reduce((s, g) => s + g.results, 0);
-    chart7a = await chartDonut(
-      genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)),
-      genders.map(g => totalSpend > 0 ? +(g.spend / totalSpend * 100).toFixed(1) : 0),
-      'Spend Split (%)',
-      ['#E8A000', '#1A7FCC', '#32cd32']
-    );
-    chart7b = await chartDonut(
-      genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)),
-      genders.map(g => totalResults > 0 ? +(g.results / totalResults * 100).toFixed(1) : 0),
-      'Results Split (%)',
-      ['#E8A000', '#1A7FCC', '#32cd32']
-    );
+    const tS = genders.reduce((s, g) => s + g.spend, 0);
+    const tR = genders.reduce((s, g) => s + g.results, 0);
+    chart7a = await chartDonut(genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)), genders.map(g => tS > 0 ? +(g.spend / tS * 100).toFixed(1) : 0), 'Spend Split (%)', ['#E8A000','#1A7FCC','#32cd32']);
+    chart7b = await chartDonut(genders.map(g => g.gender.charAt(0).toUpperCase() + g.gender.slice(1)), genders.map(g => tR > 0 ? +(g.results / tR * 100).toFixed(1) : 0), 'Results Split (%)', ['#E8A000','#1A7FCC','#32cd32']);
   }
 
   // ── Build Document ───────────────────────────────────────────────────────────
   const generatedDate = new Date().toLocaleDateString('en-MY', { day: 'numeric', month: 'long', year: 'numeric' });
+  const bestCampaign  = campaigns.length > 0 ? [...campaigns].sort((a, b) => b.primaryResult.count - a.primaryResult.count)[0] : null;
 
-  // Top performer label for exec summary
-  const bestCampaign = campaigns.length > 0 ? [...campaigns].sort((a, b) => b.primaryResult.count - a.primaryResult.count)[0] : null;
   const execNarrative = `This report covers the performance of ${campaigns.length} active Meta Ads campaign${campaigns.length !== 1 ? 's' : ''} for ${client.name} during ${periodLabel}. A total budget of ${fmtRM(totals.spend)} generated ${fmtNum(totals.reach)} unique reach, ${fmtNum(totals.impressions)} impressions, and ${fmtNum(totals.totalResults)} primary results across all campaigns — an average cost per result of ${fmtRM(totals.avgCPR)}. Overall CTR of ${fmtPct(totals.ctr)} is ${totals.ctr >= BENCH.ctrLow ? `${(totals.ctr / BENCH.ctrLow).toFixed(1)}x above` : 'below'} the Malaysia benchmark of ${BENCH.ctrLow}–${BENCH.ctrHigh}%.${bestCampaign ? ` Best-performing campaign: ${bestCampaign.name} (${fmtNum(bestCampaign.primaryResult.count)} ${bestCampaign.primaryResult.label} at ${fmtRM(bestCampaign.primaryResult.cpr)} each).` : ''}`;
 
   const children = [
-    // ── COVER PAGE ─────────────────────────────────────────────────────────────
-    new Paragraph({ spacing: { before: 1800, after: 120 }, alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: 'META ADS PERFORMANCE REPORT', bold: true, size: 52, color: BRAND.darkGreen, font: 'Calibri' })]
-    }),
+    // ── COVER PAGE ───────────────────────────────────────────────────────────
+    new Paragraph({ spacing: { before: 1600, after: 120 }, alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: 'META ADS PERFORMANCE REPORT', bold: true, size: 52, color: BRAND.darkGreen, font: FONT })] }),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 100 },
-      children: [new TextRun({ text: `${periodLabel}  ·  ${dateStart} – ${dateStop}`, size: 26, color: '666666', font: 'Calibri' })]
-    }),
+      children: [new TextRun({ text: `${periodLabel}  ·  ${dateStart} – ${dateStop}`, size: 26, color: '666666', font: FONT })] }),
     spacer(2),
+
     new Table({
       width: { size: PAGE.content, type: WidthType.DXA },
       columnWidths: [Math.floor(PAGE.content / 2), Math.floor(PAGE.content / 2)],
@@ -731,37 +788,40 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
           borders: border(BRAND.borderGrey),
           width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
           shading: { fill: BRAND.lightGrey, type: ShadingType.CLEAR },
-          margins: { top: 200, bottom: 200, left: 240, right: 240 },
+          margins: { top: 240, bottom: 240, left: 280, right: 280 },
           children: [
-            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: 'Prepared for', size: 16, color: '888888', font: 'Calibri', italics: true })] }),
-            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: client.name, bold: true, size: 24, color: BRAND.darkGreen, font: 'Calibri' })] }),
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: `Client Code: ${client.clientCode}`, size: 18, color: '666666', font: 'Calibri' })] })
+            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: 'Prepared for', size: 16, color: '888888', font: FONT, italics: true })] }),
+            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: client.name, bold: true, size: 24, color: BRAND.darkGreen, font: FONT })] }),
+            new Paragraph({ spacing: { before: 0, after: 0 },  children: [new TextRun({ text: `Client Code: ${client.clientCode}`, size: 18, color: '666666', font: FONT })] })
           ]
         }),
         new TableCell({
           borders: border(BRAND.borderGrey),
           width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
           shading: { fill: BRAND.lightGrey, type: ShadingType.CLEAR },
-          margins: { top: 200, bottom: 200, left: 240, right: 240 },
+          margins: { top: 240, bottom: 240, left: 280, right: 280 },
           children: [
-            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: 'Prepared by', size: 16, color: '888888', font: 'Calibri', italics: true })] }),
-            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: 'Millecube Digital', bold: true, size: 24, color: BRAND.amber, font: 'Calibri' })] }),
-            new Paragraph({ spacing: { before: 0, after: 0 }, children: [new TextRun({ text: 'Performance Marketing Agency', size: 18, color: '666666', font: 'Calibri', italics: true })] })
+            new Paragraph({ spacing: { before: 0, after: 60 }, children: [new TextRun({ text: 'Prepared by', size: 16, color: '888888', font: FONT, italics: true })] }),
+            new Paragraph({ spacing: { before: 0, after: 40 }, children: [new TextRun({ text: COMPANY.name, bold: true, size: 24, color: BRAND.amber, font: FONT })] }),
+            new Paragraph({ spacing: { before: 0, after: 0 },  children: [new TextRun({ text: COMPANY.entity, size: 16, color: '666666', font: FONT })] })
           ]
         })
       ]})]
     }),
+
+    new Paragraph({ spacing: { before: 120, after: 60 }, alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: `Generated on ${generatedDate}  ·  Confidential`, size: 16, color: BRAND.midGrey, font: FONT, italics: true })] }),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 1: Executive Summary ──────────────────────────────────────────
+    // ── SECTION 1: Executive Summary ─────────────────────────────────────────
     heading('1.  Executive Summary'),
     para(execNarrative, { color: '444444' }),
     spacer(),
     kpiTable([
-      { label: 'Total Ad Spend', value: fmtRM(totals.spend), sub: periodLabel },
-      { label: 'Total Reach', value: fmtNum(totals.reach), sub: 'Unique Accounts' },
-      { label: 'Total Results', value: fmtNum(totals.totalResults), sub: `${campaigns.length} Campaigns` },
-      { label: 'Avg. CTR', value: fmtPct(totals.ctr), sub: `vs ${BENCH.ctrLow}–${BENCH.ctrHigh}% benchmark` }
+      { label: 'Total Ad Spend',  value: fmtRM(totals.spend),          sub: periodLabel },
+      { label: 'Total Reach',     value: fmtNum(totals.reach),          sub: 'Unique Accounts' },
+      { label: 'Total Results',   value: fmtNum(totals.totalResults),   sub: `${campaigns.length} Campaigns` },
+      { label: 'Avg. CTR',        value: fmtPct(totals.ctr),            sub: `vs ${BENCH.ctrLow}–${BENCH.ctrHigh}% benchmark` }
     ]),
     spacer(),
     summaryTable(
@@ -771,33 +831,26 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
     ),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 2: Overall Account Performance ────────────────────────────────
+    // ── SECTION 2: Account Performance ──────────────────────────────────────
     heading('2.  Overall Account Performance'),
-    para(`${client.name}'s Meta Ads account delivered ${totals.ctr >= BENCH.ctrStrong ? 'strong, cost-efficient' : 'consistent'} results in ${periodLabel}. CPM of ${fmtRM(totals.cpm)} is ${totals.cpm <= BENCH.cpmHigh ? 'within' : 'above'} the Malaysia benchmark of RM ${BENCH.cpmLow}–${BENCH.cpmHigh}. CPC of ${fmtRM(totals.cpc)} is ${totals.cpc <= BENCH.cpcHigh ? `${totals.cpc <= BENCH.cpcLow ? 'well below' : 'within'}` : 'above'} the RM ${BENCH.cpcLow}–${BENCH.cpcHigh} benchmark.`, { color: '444444' }),
+    para(`${client.name}'s Meta Ads account delivered ${totals.ctr >= BENCH.ctrStrong ? 'strong, cost-efficient' : 'consistent'} results in ${periodLabel}. CPM of ${fmtRM(totals.cpm)} is ${totals.cpm <= BENCH.cpmHigh ? 'within' : 'above'} the Malaysia benchmark of RM ${BENCH.cpmLow}–${BENCH.cpmHigh}. CPC of ${fmtRM(totals.cpc)} is ${totals.cpc <= BENCH.cpcHigh ? (totals.cpc <= BENCH.cpcLow ? 'well below' : 'within') : 'above'} the RM ${BENCH.cpcLow}–${BENCH.cpcHigh} benchmark.`, { color: '444444' }),
     spacer(0.5),
     chart1 ? chartImage(chart1, 560, 260) : spacer(),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 3: Campaign Performance ──────────────────────────────────────
+    // ── SECTION 3: Campaign Performance ─────────────────────────────────────
     heading('3.  Campaign Performance'),
     para(`${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''} were active in ${periodLabel}. Each campaign ran with a distinct objective and primary performance goal. The table below summarises key metrics per campaign.`, { color: '444444' }),
     spacer(0.5),
     summaryTable(
       [
-        ...campaigns.map(c => [
-          c.name, fmtRM(c.spend), fmtNum(c.reach), fmtNum(c.impressions),
-          fmtPct(c.ctr), fmtRM(c.cpm), fmtRM(c.cpc),
-          `${fmtNum(c.primaryResult.count)} ${c.primaryResult.label}`, fmtRM(c.primaryResult.cpr)
-        ]),
-        ['TOTAL / AVG', fmtRM(totals.spend), fmtNum(totals.reach), fmtNum(totals.impressions),
-          fmtPct(totals.ctr), fmtRM(totals.cpm), fmtRM(totals.cpc),
-          fmtNum(totals.totalResults), fmtRM(totals.avgCPR)]
+        ...campaigns.map(c => [c.name, fmtRM(c.spend), fmtNum(c.reach), fmtNum(c.impressions), fmtPct(c.ctr), fmtRM(c.cpm), fmtRM(c.cpc), `${fmtNum(c.primaryResult.count)} ${c.primaryResult.label}`, fmtRM(c.primaryResult.cpr)]),
+        ['TOTAL / AVG', fmtRM(totals.spend), fmtNum(totals.reach), fmtNum(totals.impressions), fmtPct(totals.ctr), fmtRM(totals.cpm), fmtRM(totals.cpc), fmtNum(totals.totalResults), fmtRM(totals.avgCPR)]
       ],
       ['Campaign', 'Spend', 'Reach', 'Impressions', 'CTR', 'CPM', 'CPC', 'Results', 'CPR'],
       [2400, 900, 900, 1100, 700, 800, 700, 1300, 838]
     ),
     spacer(0.5),
-    // Campaign highlights
     heading('Campaign Highlights', 2),
     ...campaigns.map(c => para(
       `${c.name}: Delivered ${fmtNum(c.primaryResult.count)} ${c.primaryResult.label} at ${fmtRM(c.primaryResult.cpr)} each — CTR ${fmtPct(c.ctr)}${c.ctr >= BENCH.ctrStrong ? ' ⭐ above benchmark' : c.ctr >= BENCH.ctrLow ? ' ✓ on benchmark' : ' ⚠ below benchmark'}, CPM ${fmtRM(c.cpm)}.`,
@@ -807,7 +860,7 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
     chart2 ? chartImage(chart2, 560, 260) : spacer(),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 4: Daily Trends ───────────────────────────────────────────────
+    // ── SECTION 4: Daily Trends ──────────────────────────────────────────────
     heading('4.  Daily Performance Trends'),
     ...(daily.length > 1 ? (() => {
       const peakSpend   = daily.reduce((a, b) => b.spend   > a.spend   ? b : a, daily[0]);
@@ -824,20 +877,16 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
     })() : [para('No daily trend data available for this period.', { color: '999999' })]),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 5: Platform Analysis ─────────────────────────────────────────
+    // ── SECTION 5: Platform Analysis ────────────────────────────────────────
     heading('5.  Platform Analysis'),
     para('Performance comparison across Facebook and Instagram placements.', { color: '444444' }),
     spacer(0.5),
     summaryTable(
-      [
-        ...platforms.map(p => [
-          p.platform.charAt(0).toUpperCase() + p.platform.slice(1),
-          fmtRM(p.spend),
-          `${(totals.spend > 0 ? p.spend / totals.spend * 100 : 0).toFixed(1)}%`,
-          fmtNum(p.impressions), fmtNum(p.clicks),
-          fmtPct(p.ctr), fmtRM(p.cpm), fmtNum(p.results), fmtRM(p.cpr)
-        ])
-      ],
+      platforms.map(p => [
+        p.platform.charAt(0).toUpperCase() + p.platform.slice(1),
+        fmtRM(p.spend), `${(totals.spend > 0 ? p.spend / totals.spend * 100 : 0).toFixed(1)}%`,
+        fmtNum(p.impressions), fmtNum(p.clicks), fmtPct(p.ctr), fmtRM(p.cpm), fmtNum(p.results), fmtRM(p.cpr)
+      ]),
       ['Platform', 'Spend', 'Spend %', 'Impressions', 'Clicks', 'CTR', 'CPM', 'Results', 'CPR'],
       [1300, 1000, 800, 1100, 900, 700, 800, 800, 838]
     ),
@@ -847,17 +896,17 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
       const ig = platforms.find(p => p.platform === 'instagram');
       if (!fb || !ig) return [para('Single platform data available above.', { color: '555555' })];
       const leader = fb.results >= ig.results ? fb : ig;
-      const lName = leader.platform === 'facebook' ? 'Facebook' : 'Instagram';
+      const lName  = leader.platform === 'facebook' ? 'Facebook' : 'Instagram';
       return [
-        para(`${lName} accounted for ${(leader.spend / totals.spend * 100).toFixed(1)}% of total spend and delivered ${fmtNum(leader.results)} results — significantly outperforming the other platform in both volume and efficiency (CPR ${fmtRM(fb.cpr)} vs ${fmtRM(ig.cpr)}). This is consistent with the target audience profile and placement behaviour for this account.`, { color: '444444' }),
-        para(`• Facebook CTR: ${fmtPct(fb.ctr)} — ${fb.ctr >= BENCH.ctrLow ? 'above benchmark' : 'below benchmark'}.`, { color: '444444', before: 40, after: 20 }),
+        para(`${lName} accounted for ${(leader.spend / totals.spend * 100).toFixed(1)}% of total spend and delivered ${fmtNum(leader.results)} results — outperforming the other platform in both volume and efficiency (CPR ${fmtRM(fb.cpr)} vs ${fmtRM(ig.cpr)}). This is consistent with the target audience profile and placement behaviour for this account.`, { color: '444444' }),
+        para(`• Facebook CTR: ${fmtPct(fb.ctr)} — ${fb.ctr >= BENCH.ctrLow ? 'above benchmark' : 'below benchmark'}.`,       { color: '444444', before: 40, after: 20 }),
         para(`• Instagram CTR: ${fmtPct(ig.ctr)} — ${ig.ctr >= BENCH.ctrLow ? 'above benchmark' : 'low engagement, suggesting format or audience mismatch'}.`, { color: '444444', before: 20, after: 40 }),
       ];
     })(),
     chart5 ? chartImage(chart5, 560, 280) : spacer(),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 6: Audience Analysis ─────────────────────────────────────────
+    // ── SECTION 6: Audience Analysis ────────────────────────────────────────
     heading('6.  Audience Analysis'),
     heading('6a. Age Group Breakdown', 2),
     ...(ages.length > 0 ? (() => {
@@ -880,8 +929,8 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
       const totalR = genders.reduce((s, g) => s + g.results, 0);
       const male   = genders.find(g => g.gender === 'male');
       const female = genders.find(g => g.gender === 'female');
-      const genderNote = male && female
-        ? `Male audience received ${(male.spend / totals.spend * 100).toFixed(1)}% of total spend and delivered ${(male.results / Math.max(totalR, 1) * 100).toFixed(1)}% of total results (${fmtNum(male.results)} vs ${fmtNum(female.results)}). ${male.cpr < female.cpr ? 'Male audience is converting at a lower cost per result' : 'Female audience is converting at a lower cost per result'} (${fmtRM(male?.cpr || 0)} vs ${fmtRM(female?.cpr || 0)}). ${Math.abs((male?.results || 0) - (female?.results || 0)) / Math.max(totalR, 1) > 0.3 ? 'The current gender skew reflects Meta\'s auto-optimisation finding stronger conversion signals from one gender. Both should remain in targeting.' : 'Both genders are performing comparably — maintain broad gender targeting.'}`
+      const gNote  = male && female
+        ? `Male audience received ${(male.spend / totals.spend * 100).toFixed(1)}% of total spend and delivered ${(male.results / Math.max(totalR, 1) * 100).toFixed(1)}% of total results (${fmtNum(male.results)} vs ${fmtNum(female.results)}). ${male.cpr < female.cpr ? 'Male audience is converting at a lower cost per result' : 'Female audience is converting at a lower cost per result'} (${fmtRM(male?.cpr || 0)} vs ${fmtRM(female?.cpr || 0)}). Both genders should remain in targeting to allow Meta's algorithm to self-optimise.`
         : '';
       return [
         summaryTable(
@@ -890,15 +939,14 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
           [1400, 1200, 900, 1000, 900, 1000, 2238]
         ),
         spacer(0.5),
-        ...(genderNote ? [para(genderNote, { color: '444444' })] : []),
-        // Side by side donuts
+        ...(gNote ? [para(gNote, { color: '444444' })] : []),
         ...(chart7a && chart7b ? [new Table({
           width: { size: PAGE.content, type: WidthType.DXA },
           columnWidths: [Math.floor(PAGE.content / 2), Math.floor(PAGE.content / 2)],
           rows: [new TableRow({ children: [
-            new TableCell({ borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }, width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
+            new TableCell({ ...noB, width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
               children: [new Paragraph({ spacing: { before: 120, after: 0 }, children: [new ImageRun({ data: chart7a, type: 'png', transformation: { width: 260, height: 210 } })] })] }),
-            new TableCell({ borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }, width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
+            new TableCell({ ...noB, width: { size: Math.floor(PAGE.content / 2), type: WidthType.DXA },
               children: [new Paragraph({ spacing: { before: 120, after: 0 }, children: [new ImageRun({ data: chart7b, type: 'png', transformation: { width: 260, height: 210 } })] })] }),
           ]})]
         })] : []),
@@ -906,17 +954,17 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
     })() : [para('No gender breakdown data available.', { color: '999999' })]),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION 7: Video (conditional) ───────────────────────────────────────
+    // ── SECTION 7: Video (conditional) ──────────────────────────────────────
     ...(hasVideo ? (() => {
       const totV = campaigns.reduce((acc, c) => ({ views: acc.views + c.videoViews, v25: acc.v25 + c.video25, v50: acc.v50 + c.video50, v75: acc.v75 + c.video75, v100: acc.v100 + c.video100 }), { views: 0, v25: 0, v50: 0, v75: 0, v100: 0 });
-      const ret = parseFloat(totV.views > 0 ? totV.v100 / totV.views * 100 : 0);
+      const ret  = parseFloat(totV.views > 0 ? totV.v100 / totV.views * 100 : 0);
       return [
         heading('7.  Video Performance'),
         para(`Video completion funnel across all campaigns. ${ret >= 10 ? '✅ Strong' : ret >= 5 ? '⚠️ Average' : '⚠️ Low'} completion rate of ${fmtPct(ret)} (benchmark: 5–15%).`, { color: '444444' }),
         spacer(0.5),
         summaryTable(
           [
-            ['Count', fmtNum(totV.views), fmtNum(totV.v25), fmtNum(totV.v50), fmtNum(totV.v75), fmtNum(totV.v100)],
+            ['Count',      fmtNum(totV.views), fmtNum(totV.v25), fmtNum(totV.v50), fmtNum(totV.v75), fmtNum(totV.v100)],
             ['% of Views', '100%', fmtPct(totV.views > 0 ? totV.v25 / totV.views * 100 : 0), fmtPct(totV.views > 0 ? totV.v50 / totV.views * 100 : 0), fmtPct(totV.views > 0 ? totV.v75 / totV.views * 100 : 0), fmtPct(totV.views > 0 ? totV.v100 / totV.views * 100 : 0)]
           ],
           ['Stage', '3s Views', '25% Watched', '50% Watched', '75% Watched', '100% Watched'],
@@ -926,13 +974,13 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
       ];
     })() : []),
 
-    // ── SECTION 8: Engagement (conditional) ──────────────────────────────────
+    // ── SECTION 8: Engagement (conditional) ─────────────────────────────────
     ...(hasEngagement ? (() => {
-      const hasEng = campaigns.filter(c => c.reactions > 0 || c.shares > 0);
+      const hasEng   = campaigns.filter(c => c.reactions > 0 || c.shares > 0);
       if (hasEng.length === 0) return [];
-      const sectionNum = hasVideo ? '8' : '7';
+      const secNum   = hasVideo ? '8' : '7';
       return [
-        heading(`${sectionNum}.  Post Engagement Breakdown`),
+        heading(`${secNum}.  Post Engagement Breakdown`),
         para('Breakdown of post engagement types across campaigns — reactions, shares, comments, and saves.', { color: '444444' }),
         spacer(0.5),
         summaryTable(
@@ -944,56 +992,38 @@ async function generate({ client, rawData, dateStart, dateStop, periodLabel, out
       ];
     })() : []),
 
-    // ── SECTION: Findings & Analysis ─────────────────────────────────────────
+    // ── SECTION: Findings & Analysis ────────────────────────────────────────
     heading(`${hasVideo && hasEngagement ? '9' : hasVideo || hasEngagement ? '8' : '7'}.  Findings & Analysis`),
-    para('Key findings from this reporting period, benchmarked against Malaysia Meta Ads standards.', { color: '666666', italic: true }),
+    new Paragraph({ spacing: { before: 0, after: 120 }, children: [new TextRun({ text: 'Key findings from this reporting period, benchmarked against Malaysia Meta Ads standards.', size: 18, color: '777777', font: FONT, italics: true })] }),
     spacer(0.5),
     ...insights.flatMap(ins => insightCard(ins.emoji, ins.title, ins.body, ins.color)),
     new Paragraph({ pageBreakBefore: true, children: [new TextRun('')] }),
 
-    // ── SECTION: Recommendations ─────────────────────────────────────────────
+    // ── SECTION: Strategy & Recommendations ─────────────────────────────────
     heading(`${hasVideo && hasEngagement ? '10' : hasVideo || hasEngagement ? '9' : '8'}.  Strategy & Recommendations`),
-    para('Prioritised action items for the next campaign period. Each recommendation is tied to a specific data signal from this report.', { color: '666666', italic: true }),
+    new Paragraph({ spacing: { before: 0, after: 120 }, children: [new TextRun({ text: 'Prioritised action items for the next campaign period. Each recommendation is tied to a specific data signal from this report.', size: 18, color: '777777', font: FONT, italics: true })] }),
     spacer(0.5),
     ...recs.flatMap((r, i) => recCard(i + 1, r.title, r.why, r.impact)),
 
+    // ── End ──────────────────────────────────────────────────────────────────
     new Paragraph({ spacing: { before: 480, after: 120 }, alignment: AlignmentType.CENTER,
-      children: [new TextRun({ text: '— End of Report —', size: 18, color: BRAND.midGrey, font: 'Calibri' })]
-    }),
+      children: [new TextRun({ text: '— End of Report —', size: 18, color: BRAND.midGrey, font: FONT })] }),
     new Paragraph({ alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 },
-      children: [new TextRun({ text: `Generated ${generatedDate}  ·  Millecube Digital  ·  Confidential`, size: 16, color: BRAND.midGrey, font: 'Calibri', italics: true })]
-    })
+      children: [new TextRun({ text: `Generated ${generatedDate}  ·  Millecube Digital  ·  Confidential`, size: 16, color: BRAND.midGrey, font: FONT, italics: true })] })
   ];
 
   // ── Document ─────────────────────────────────────────────────────────────────
   const doc = new Document({
-    styles: { default: { document: { run: { font: 'Calibri', size: 18 } } } },
+    styles: { default: { document: { run: { font: FONT, size: 19 } } } },
     sections: [{
       properties: {
-        page: { size: { width: PAGE.width, height: PAGE.height }, margin: { top: PAGE.margin, right: PAGE.margin, bottom: PAGE.margin, left: PAGE.margin } }
+        page: {
+          size:   { width: PAGE.width, height: PAGE.height },
+          margin: { top: PAGE.margin, right: PAGE.margin, bottom: PAGE.margin, left: PAGE.margin }
+        }
       },
-      headers: {
-        default: new Header({ children: [new Paragraph({
-          border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: BRAND.green, space: 6 } },
-          spacing: { after: 80 },
-          tabStops: [{ type: TabStopType.RIGHT, position: PAGE.content }],
-          children: [
-            new TextRun({ text: `${client.clientCode} — ${client.name}  ·  Meta Ads Report  ·  ${periodLabel}`, size: 16, color: BRAND.darkGreen, font: 'Calibri', bold: true }),
-            new TextRun({ text: '\tPrepared by Millecube Digital  ·  Confidential', size: 16, color: BRAND.midGrey, font: 'Calibri' })
-          ]
-        })] })
-      },
-      footers: {
-        default: new Footer({ children: [new Paragraph({
-          border: { top: { style: BorderStyle.SINGLE, size: 6, color: BRAND.green, space: 6 } },
-          spacing: { before: 80 },
-          alignment: AlignmentType.CENTER,
-          children: [
-            new TextRun({ text: `${client.name}  ·  Meta Ads Report — ${periodLabel}  ·  Prepared by Millecube Digital  ·  Confidential    Pg. `, size: 16, color: BRAND.midGrey, font: 'Calibri' }),
-            new PageNumberElement({ type: PageNumber.CURRENT, size: 16, color: BRAND.midGrey, font: 'Calibri' })
-          ]
-        })] })
-      },
+      headers: { default: buildHeader() },
+      footers: { default: buildFooter(client, periodLabel) },
       children
     }]
   });
