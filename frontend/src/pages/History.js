@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { clientsAPI, jobsAPI } from '../utils/api';
+import { clientsAPI, jobsAPI, backendUrl } from '../utils/api';
 
 const STATUS_COLORS = { done: '#32cd32', running: '#f5a623', failed: '#ff4d4d' };
 const STATUS_LABELS = { done: 'Done', running: 'Running…', failed: 'Failed' };
@@ -155,7 +155,7 @@ export default function History() {
                   <td>
                     {job.filePath ? (
                       <a
-                        href={job.filePath}
+                        href={backendUrl(job.filePath)}
                         download
                         className="btn btn-primary btn-sm"
                         style={{ textDecoration: 'none' }}

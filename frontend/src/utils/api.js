@@ -30,4 +30,9 @@ export const jobsAPI = {
   list: (params) => api.get('/jobs', { params }).then(r => r.data)
 };
 
+export const backendUrl = (path) => {
+  const base = process.env.REACT_APP_API_URL || '';
+  return `${base}${path}`;
+};
+
 export default api;
