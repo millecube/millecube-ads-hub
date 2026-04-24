@@ -196,18 +196,17 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
 const { google } = require('googleapis');
 
 async function uploadToDrive(filePath, fileName, clientCode) {
-  const keyJson  = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  if (!keyJson || !folderId) return null; // not configured — skip silently
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  const folderId     = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  if (!clientId || !clientSecret || !refreshToken || !folderId) return null;
 
   try {
-    const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(keyJson),
-      // 'drive' scope required — 'drive.file' only covers files the bot itself created,
-      // not folders shared with it by the account owner
-      scopes: ['https://www.googleapis.com/auth/drive']
-    });
-    const drive = google.drive({ version: 'v3', auth });
+    // OAuth2 uses YOUR real Google account — files use your Drive storage quota (15GB free)
+    const oauth2 = new google.auth.OAuth2(clientId, clientSecret, 'https://oauth2.googleapis.com/token');
+    oauth2.setCredentials({ refresh_token: refreshToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2 });
 
     // Find existing client subfolder — only create if not found
     let targetFolderId;

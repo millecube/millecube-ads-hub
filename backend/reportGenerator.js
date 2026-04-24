@@ -10,8 +10,7 @@ const {
   WidthType, ShadingType, VerticalAlign, PageNumber, PageNumberElement,
   TabStopType, UnderlineType,
   HorizontalPositionAlign, HorizontalPositionRelativeFrom,
-  VerticalPositionAlign, VerticalPositionRelativeFrom,
-  WrapType
+  VerticalPositionAlign, VerticalPositionRelativeFrom
 } = require('docx');
 const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 const { createCanvas, loadImage } = require('canvas');
@@ -606,8 +605,7 @@ function buildHeader(logoBuffer, watermarkBuffer) {
             relative: VerticalPositionRelativeFrom.PAGE
           },
           behindDocument: true,
-          allowOverlap: true,
-          wrap: { type: WrapType.NONE }
+          allowOverlap: true
         }
       })]
     }));
