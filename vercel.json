@@ -1,3 +1,5 @@
 {
-  "framework": "create-react-app"
+  "installCommand": "npm install --prefix frontend",
+  "buildCommand": "npm run build --prefix frontend",
+  "outputDirectory": "frontend/build"
 }
