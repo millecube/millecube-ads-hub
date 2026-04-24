@@ -312,7 +312,7 @@ function getLastMonthRange() {
   const now = new Date();
   const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const lastDay  = new Date(now.getFullYear(), now.getMonth(), 0);
-  const fmt = (d) => d.toISOString().split('T')[0];
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const label = firstDay.toLocaleString('en-MY', { month: 'long', year: 'numeric' }).replace(' ', '');
   return { dateStart: fmt(firstDay), dateStop: fmt(lastDay), label };
 }
