@@ -524,7 +524,7 @@ async function buildWatermarkBuffer(logoPath) {
     const H = Math.round(W * img.height / img.width);
     const canvas = createCanvas(W, H);
     const ctx = canvas.getContext('2d');
-    ctx.globalAlpha = 0.5; // 50% transparency as requested
+    ctx.globalAlpha = 0.25; // 25% transparency
     ctx.drawImage(img, 0, 0, W, H);
     return canvas.toBuffer('image/png');
   } catch (err) {
@@ -541,7 +541,7 @@ function buildHeader(logoBuffer, watermarkBuffer) {
     leftChildren = [
       new Paragraph({
         spacing: { before: 0, after: 0 },
-        children: [new ImageRun({ data: logoBuffer, type: 'png', transformation: { width: 120, height: 48 } })]
+        children: [new ImageRun({ data: logoBuffer, type: 'png', transformation: { width: 200, height: 133 } })]
       })
     ];
   } else {
@@ -572,11 +572,11 @@ function buildHeader(logoBuffer, watermarkBuffer) {
 
   const table = new Table({
     width: { size: PAGE.content, type: WidthType.DXA },
-    columnWidths: [1800, PAGE.content - 1800],
+    columnWidths: [3000, PAGE.content - 3000],
     rows: [new TableRow({ children: [
-      new TableCell({ ...noB, width: { size: 1800, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+      new TableCell({ ...noB, width: { size: 3000, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
         margins: { top: 60, bottom: 60, left: 0, right: 200 }, children: leftChildren }),
-      new TableCell({ ...noB, width: { size: PAGE.content - 1800, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
+      new TableCell({ ...noB, width: { size: PAGE.content - 3000, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER,
         margins: { top: 60, bottom: 60, left: 200, right: 0 }, children: rightChildren }),
     ]})]
   });
