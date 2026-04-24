@@ -125,24 +125,17 @@ function logMetaError(err, label) {
   }
 }
 
-// ── Email Notifications ────────────────────────────────────────────────────────
-const nodemailer = require('nodemailer');
-
-function getMailer() {
-  if (!process.env.EMAIL_HOST || !process.env.EMAIL_USER || !process.env.EMAIL_PASS) return null;
-  return nodemailer.createTransport({
-    host:   process.env.EMAIL_HOST,
-    port:   parseInt(process.env.EMAIL_PORT || '587'),
-    secure: process.env.EMAIL_PORT === '465',
-    auth:   { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-  });
-}
+// ── Email Notifications (via Resend — no email password needed) ────────────────
+const { Resend } = require('resend');
 
 async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, error) {
-  const mailer = getMailer();
-  if (!mailer) return; // EMAIL_HOST/USER/PASS not set — skip silently
-  const to   = process.env.EMAIL_TO || process.env.EMAIL_USER;
-  const from  = `"Millecube Ads Hub" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`;
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return; // not configured — skip silently
+
+  const resend  = new Resend(apiKey);
+  const to      = process.env.EMAIL_TO || 'hello@millecube.com';
+  // Use verified sender domain if set, otherwise Resend's default test sender
+  const from    = process.env.EMAIL_FROM || 'Millecube Ads Hub <onboarding@resend.dev>';
 
   const subject = status === 'done'
     ? `Report Ready — ${client.clientCode} · ${periodLabel}`
@@ -159,7 +152,7 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
         <p style="color:#aaa;margin:6px 0 0">Automated Report Notification</p>
       </div>
       <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
-        <h2 style="color:#07503c;margin-top:0">✅ Report Successfully Generated</h2>
+        <h2 style="color:#07503c;margin-top:0">&#x2705; Report Successfully Generated</h2>
         <table style="width:100%;border-collapse:collapse;font-size:14px">
           <tr style="background:#f5f5f5"><td style="padding:8px 12px;font-weight:bold;width:40%">Client</td><td style="padding:8px 12px">${client.name} (${client.clientCode})</td></tr>
           <tr><td style="padding:8px 12px;font-weight:bold">Period</td><td style="padding:8px 12px">${periodLabel}</td></tr>
@@ -167,7 +160,7 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
           <tr><td style="padding:8px 12px;font-weight:bold">Status</td><td style="padding:8px 12px"><span style="color:#32cd32;font-weight:bold">Done</span></td></tr>
         </table>
         ${driveBtn}
-        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital · Automated Report System · Do not reply to this email</p>
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital &middot; Automated Report System &middot; Do not reply to this email</p>
       </div>
     </div>` : `
     <div style="font-family:Arial,sans-serif;max-width:600px;color:#222">
@@ -176,18 +169,18 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
         <p style="color:#aaa;margin:6px 0 0">Automated Report Notification</p>
       </div>
       <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
-        <h2 style="color:#cc3333;margin-top:0">❌ Report Generation Failed</h2>
+        <h2 style="color:#cc3333;margin-top:0">&#x274C; Report Generation Failed</h2>
         <table style="width:100%;border-collapse:collapse;font-size:14px">
           <tr style="background:#f5f5f5"><td style="padding:8px 12px;font-weight:bold;width:40%">Client</td><td style="padding:8px 12px">${client.name} (${client.clientCode})</td></tr>
           <tr><td style="padding:8px 12px;font-weight:bold">Period</td><td style="padding:8px 12px">${periodLabel}</td></tr>
           <tr style="background:#fff3f3"><td style="padding:8px 12px;font-weight:bold">Error</td><td style="padding:8px 12px;color:#cc3333">${error}</td></tr>
         </table>
-        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital · Automated Report System · Do not reply to this email</p>
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital &middot; Automated Report System &middot; Do not reply to this email</p>
       </div>
     </div>`;
 
   try {
-    await mailer.sendMail({ from, to, subject, html });
+    const result = await resend.emails.send({ from, to, subject, html });
     console.log(`[EMAIL] Sent to ${to} — ${subject}`);
   } catch (err) {
     console.error('[EMAIL] Failed to send:', err.message);
