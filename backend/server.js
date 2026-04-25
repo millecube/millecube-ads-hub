@@ -724,9 +724,6 @@ app.post('/api/schedules', async (req, res) => {
     const client = clients.find(c => c.id === clientId);
     if (!client) return res.status(404).json({ error: 'Client not found' });
     const schedules = await readSchedules();
-    if (schedules.find(s => s.clientId === clientId)) {
-      return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
-    }
     const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, frequency, dayOfMonth, dayOfWeek, hour, minute, active, createdAt: new Date().toISOString() };
     await writeSchedules([...schedules, schedule]);
     if (active) scheduleCron(schedule);

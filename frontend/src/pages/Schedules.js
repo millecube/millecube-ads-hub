@@ -128,9 +128,6 @@ function ScheduleModal({ clients, schedules, onClose, onSaved }) {
   const [minute,     setMinute]     = useState(0);
   const [saving,     setSaving]     = useState(false);
 
-  const usedClientIds = new Set(schedules.map(s => s.clientId));
-  const available = clients.filter(c => !usedClientIds.has(c.id));
-
   const submit = async (e) => {
     e.preventDefault();
     if (!clientId) return toast('Select a client.', 'error');
@@ -152,9 +149,9 @@ function ScheduleModal({ clients, schedules, onClose, onSaved }) {
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
 
-        {available.length === 0 ? (
+        {clients.length === 0 ? (
           <div style={{ color: 'var(--text-muted)', fontSize: 14, padding: '12px 0' }}>
-            All clients already have schedules. Edit or remove existing ones below.
+            No clients found. Add a client first.
           </div>
         ) : (
           <form onSubmit={submit}>
@@ -162,7 +159,7 @@ function ScheduleModal({ clients, schedules, onClose, onSaved }) {
               <label className="form-label">Client</label>
               <select className="form-input" value={clientId} onChange={e => setClientId(e.target.value)} required>
                 <option value="">Select client…</option>
-                {available.map(c => <option key={c.id} value={c.id}>{c.clientCode} — {c.name}</option>)}
+                {clients.map(c => <option key={c.id} value={c.id}>{c.clientCode} — {c.name}</option>)}
               </select>
             </div>
 
