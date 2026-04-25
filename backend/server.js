@@ -25,17 +25,27 @@ const REPORTS_DIR = path.join(__dirname, '../reports');
 fs.ensureDirSync(DATA_DIR);
 fs.ensureDirSync(REPORTS_DIR);
 
-// ── Storage: MongoDB if MONGODB_URI set, otherwise local JSON files ────────────
+// ── Storage: MongoDB if MONGODB_URI set and reachable, otherwise local JSON ────
 let _db = null;
+let _mongoFailed = false;
 const USE_MONGO = !!process.env.MONGODB_URI;
+
+// Returns true only when MongoDB is configured AND connected successfully
+function usingMongo() { return USE_MONGO && !_mongoFailed; }
 
 async function getDb() {
   if (_db) return _db;
-  const client = new MongoClient(process.env.MONGODB_URI);
-  await client.connect();
-  _db = client.db('millecube');
-  console.log('[DB] Connected to MongoDB Atlas');
-  return _db;
+  try {
+    const client = new MongoClient(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+    await client.connect();
+    _db = client.db('millecube');
+    console.log('[DB] Connected to MongoDB Atlas');
+    return _db;
+  } catch (err) {
+    _mongoFailed = true;
+    console.error('[DB] MongoDB connection failed — falling back to file storage:', err.message);
+    throw err;
+  }
 }
 
 // File-based fallback helpers
@@ -50,34 +60,34 @@ const fileRead  = f => fs.readJsonSync(f);
 const fileWrite = (f, d) => fs.writeJsonSync(f, d, { spaces: 2 });
 
 async function readClients() {
-  if (!USE_MONGO) return fileRead(FILE.clients);
+  if (!usingMongo()) return fileRead(FILE.clients);
   const db = await getDb();
   return db.collection('clients').find({}).toArray();
 }
 async function writeClients(data) {
-  if (!USE_MONGO) return fileWrite(FILE.clients, data);
+  if (!usingMongo()) return fileWrite(FILE.clients, data);
   const db = await getDb();
   await db.collection('clients').deleteMany({});
   if (data.length > 0) await db.collection('clients').insertMany(data);
 }
 async function readSchedules() {
-  if (!USE_MONGO) return fileRead(FILE.schedules);
+  if (!usingMongo()) return fileRead(FILE.schedules);
   const db = await getDb();
   return db.collection('schedules').find({}).toArray();
 }
 async function writeSchedules(data) {
-  if (!USE_MONGO) return fileWrite(FILE.schedules, data);
+  if (!usingMongo()) return fileWrite(FILE.schedules, data);
   const db = await getDb();
   await db.collection('schedules').deleteMany({});
   if (data.length > 0) await db.collection('schedules').insertMany(data);
 }
 async function readJobs() {
-  if (!USE_MONGO) return fileRead(FILE.jobs);
+  if (!usingMongo()) return fileRead(FILE.jobs);
   const db = await getDb();
   return db.collection('jobs').find({}).sort({ createdAt: -1 }).toArray();
 }
 async function writeJobs(data) {
-  if (!USE_MONGO) return fileWrite(FILE.jobs, data);
+  if (!usingMongo()) return fileWrite(FILE.jobs, data);
   const db = await getDb();
   await db.collection('jobs').deleteMany({});
   if (data.length > 0) await db.collection('jobs').insertMany(data);
@@ -90,9 +100,13 @@ app.use('/reports', express.static(REPORTS_DIR));
 
 // ── Auth Helpers ───────────────────────────────────────────────────────────────
 async function getUser() {
-  if (USE_MONGO) {
-    const db = await getDb();
-    return db.collection('users').findOne({});
+  if (usingMongo()) {
+    try {
+      const db = await getDb();
+      return db.collection('users').findOne({});
+    } catch {
+      // MongoDB failed — fall through to file
+    }
   }
   if (!fs.existsSync(FILE.user)) return null;
   return fs.readJsonSync(FILE.user);
@@ -100,7 +114,7 @@ async function getUser() {
 
 async function saveUser(user) {
   const { _id, ...clean } = user;
-  if (USE_MONGO) {
+  if (usingMongo()) {
     const db = await getDb();
     await db.collection('users').deleteMany({});
     await db.collection('users').insertOne(clean);
@@ -184,7 +198,7 @@ async function addJob(clientId, clientCode, period, status, filePath = null, err
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  if (USE_MONGO) {
+  if (usingMongo()) {
     const db = await getDb();
     await db.collection('jobs').insertOne(job);
     const all = await db.collection('jobs').find({}).sort({ createdAt: 1 }).toArray();
@@ -201,7 +215,7 @@ async function addJob(clientId, clientCode, period, status, filePath = null, err
 }
 
 async function updateJob(id, updates) {
-  if (USE_MONGO) {
+  if (usingMongo()) {
     const db = await getDb();
     await db.collection('jobs').updateOne(
       { id },
