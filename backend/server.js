@@ -748,11 +748,21 @@ app.delete('/api/schedules/:id', async (req, res) => {
 
 app.get('/api/jobs', async (req, res) => {
   try {
-    const { clientId, limit = 200 } = req.query;
-    const db = await getDb();
-    const query = clientId ? { clientId } : {};
-    const jobs = await db.collection('jobs').find(query).sort({ createdAt: -1 }).limit(parseInt(limit)).toArray();
+    const jobs = await readJobs();
     res.json(jobs.map(j => ({ ...j, _id: undefined })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/jobs/:id', async (req, res) => {
+  try {
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('jobs').deleteOne({ id: req.params.id });
+    } else {
+      const jobs = fileRead(FILE.jobs);
+      fileWrite(FILE.jobs, jobs.filter(j => j.id !== req.params.id));
+    }
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

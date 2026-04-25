@@ -47,7 +47,8 @@ export const schedulesAPI = {
 };
 
 export const jobsAPI = {
-  list: (params) => api.get('/jobs', { params }).then(r => r.data)
+  list:   (params) => api.get('/jobs', { params }).then(r => r.data),
+  delete: (id)     => api.delete(`/jobs/${id}`).then(r => r.data),
 };
 
 export const authAPI = {

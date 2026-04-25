@@ -1,16 +1,22 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { clientsAPI, jobsAPI, backendUrl } from '../utils/api';
+import { useToast } from '../hooks/useToast';
 
 const STATUS_COLORS = { done: '#32cd32', running: '#f5a623', failed: '#ff4d4d' };
 const STATUS_LABELS = { done: 'Done', running: 'Running…', failed: 'Failed' };
 
 export default function History() {
+  const toast = useToast();
   const [jobs,       setJobs]       = useState([]);
   const [clients,    setClients]    = useState([]);
   const [loading,    setLoading]    = useState(true);
-  const [filterCode, setFilterCode] = useState('ALL');
+
+  // Filters
+  const [filterCode,   setFilterCode]   = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
-  const [search,     setSearch]     = useState('');
+  const [search,       setSearch]       = useState('');
+  const [dateFrom,     setDateFrom]     = useState('');
+  const [dateTo,       setDateTo]       = useState('');
 
   const load = useCallback(() => {
     Promise.all([jobsAPI.list({ limit: 200 }), clientsAPI.list()])
@@ -24,12 +30,25 @@ export default function History() {
     return () => clearInterval(interval);
   }, [load]);
 
+  const handleDelete = async (id, label) => {
+    if (!window.confirm(`Delete job "${label}"? This cannot be undone.`)) return;
+    try {
+      await jobsAPI.delete(id);
+      toast('Job deleted.', 'success');
+      setJobs(prev => prev.filter(j => j.id !== id));
+    } catch {
+      toast('Failed to delete job.', 'error');
+    }
+  };
+
   const clientCodes = ['ALL', ...new Set(jobs.map(j => j.clientCode).filter(Boolean))];
 
   const filtered = jobs.filter(j => {
     if (filterCode !== 'ALL' && j.clientCode !== filterCode) return false;
     if (filterStatus !== 'ALL' && j.status !== filterStatus) return false;
     if (search && !`${j.clientCode} ${j.period}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (dateFrom && j.createdAt < dateFrom) return false;
+    if (dateTo   && j.createdAt > dateTo + 'T23:59:59') return false;
     return true;
   });
 
@@ -38,6 +57,9 @@ export default function History() {
     running: jobs.filter(j => j.status === 'running').length,
     failed:  jobs.filter(j => j.status === 'failed').length,
   };
+
+  const hasFilters = filterCode !== 'ALL' || filterStatus !== 'ALL' || search || dateFrom || dateTo;
+  const clearFilters = () => { setFilterCode('ALL'); setFilterStatus('ALL'); setSearch(''); setDateFrom(''); setDateTo(''); };
 
   return (
     <div style={s.page} className="fade-up">
@@ -71,27 +93,43 @@ export default function History() {
 
       {/* Filters */}
       <div className="glass" style={s.filterBar}>
-        <input
-          className="form-input"
-          placeholder="Search by client code or period…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ flex: 1, maxWidth: 300 }}
-        />
-        <select className="form-input" value={filterCode} onChange={e => setFilterCode(e.target.value)} style={{ width: 160 }}>
-          {clientCodes.map(c => <option key={c} value={c}>{c === 'ALL' ? 'All Clients' : c}</option>)}
-        </select>
-        <select className="form-input" value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ width: 150 }}>
-          <option value="ALL">All Status</option>
-          <option value="done">Done</option>
-          <option value="running">Running</option>
-          <option value="failed">Failed</option>
-        </select>
-        {(filterCode !== 'ALL' || filterStatus !== 'ALL' || search) && (
-          <button className="btn btn-ghost btn-sm" onClick={() => { setFilterCode('ALL'); setFilterStatus('ALL'); setSearch(''); }}>
-            Clear filters
-          </button>
-        )}
+        {/* Row 1: search + client + status */}
+        <div style={s.filterRow}>
+          <input
+            className="form-input"
+            placeholder="Search by client code or period…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ flex: 1, minWidth: 180 }}
+          />
+          <select className="form-input" value={filterCode} onChange={e => setFilterCode(e.target.value)} style={{ width: 160 }}>
+            {clientCodes.map(c => <option key={c} value={c}>{c === 'ALL' ? 'All Clients' : c}</option>)}
+          </select>
+          <select className="form-input" value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ width: 140 }}>
+            <option value="ALL">All Status</option>
+            <option value="done">Done</option>
+            <option value="running">Running</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+        {/* Row 2: date range */}
+        <div style={s.filterRow}>
+          <span style={s.filterLabel}>Created from</span>
+          <input
+            type="date" className="form-input"
+            value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            style={{ width: 160 }}
+          />
+          <span style={s.filterLabel}>to</span>
+          <input
+            type="date" className="form-input"
+            value={dateTo} onChange={e => setDateTo(e.target.value)}
+            style={{ width: 160 }}
+          />
+          {hasFilters && (
+            <button className="btn btn-ghost btn-sm" onClick={clearFilters}>✕ Clear all</button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -114,6 +152,7 @@ export default function History() {
                 <th>Updated</th>
                 <th>Download</th>
                 <th>Drive</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -126,16 +165,12 @@ export default function History() {
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                       {job.status === 'running' && <div className="spinner" style={{ width: 12, height: 12 }} />}
-                      <span style={{
-                        fontSize: 12, fontWeight: 600,
-                        color: STATUS_COLORS[job.status] || '#aaa'
-                      }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: STATUS_COLORS[job.status] || 'var(--text-muted)' }}>
                         {STATUS_LABELS[job.status] || job.status}
                       </span>
                     </div>
                     {job.status === 'failed' && job.error && (
-                      <div style={{ fontSize: 10, color: '#ff4d4d', marginTop: 3, maxWidth: 200 }}
-                        title={job.error}>
+                      <div style={{ fontSize: 10, color: '#ff4d4d', marginTop: 3, maxWidth: 200 }} title={job.error}>
                         {job.error.length > 50 ? job.error.slice(0, 50) + '…' : job.error}
                       </div>
                     )}
@@ -148,19 +183,14 @@ export default function History() {
                     </span>
                   </td>
                   <td style={s.timeCell}>
-                    {job.updatedAt !== job.createdAt
+                    {job.updatedAt && job.updatedAt !== job.createdAt
                       ? new Date(job.updatedAt).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })
                       : '—'
                     }
                   </td>
                   <td>
                     {job.filePath ? (
-                      <a
-                        href={backendUrl(job.filePath)}
-                        download
-                        className="btn btn-primary btn-sm"
-                        style={{ textDecoration: 'none' }}
-                      >
+                      <a href={backendUrl(job.filePath)} download className="btn btn-primary btn-sm" style={{ textDecoration: 'none' }}>
                         ↓ .docx
                       </a>
                     ) : job.status === 'running' ? (
@@ -171,18 +201,22 @@ export default function History() {
                   </td>
                   <td>
                     {job.driveUrl ? (
-                      <a
-                        href={job.driveUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn btn-sm"
-                        style={{ textDecoration: 'none', background: 'rgba(26,127,204,0.15)', color: '#1A7FCC', border: '1px solid rgba(26,127,204,0.3)' }}
-                      >
+                      <a href={job.driveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-sm"
+                        style={{ textDecoration: 'none', background: 'rgba(26,127,204,0.15)', color: '#1A7FCC', border: '1px solid rgba(26,127,204,0.3)' }}>
                         ↗ Drive
                       </a>
                     ) : (
                       <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>—</span>
                     )}
+                  </td>
+                  <td>
+                    <button
+                      onClick={() => handleDelete(job.id, `${job.clientCode} ${job.period}`)}
+                      style={s.deleteBtn}
+                      title="Delete this record"
+                    >
+                      🗑
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -195,10 +229,10 @@ export default function History() {
       <div className="glass" style={s.noteBox}>
         <div style={s.noteTitle}>📁 File Storage Location</div>
         <div style={s.noteBody}>
-          Reports are saved locally on the server at:
-          <code style={s.codePath}> /millecube-ads-hub/reports/[CLIENT_CODE]/[filename].docx</code>
+          Reports are saved on the server at:
+          <code style={s.codePath}> /reports/[CLIENT_CODE]/[filename].docx</code>
           <br />
-          Each client gets its own subfolder. Files are accessible via the Download button above or directly from the filesystem.
+          Each client gets its own subfolder. Download via the button above or directly from the server filesystem.
         </div>
       </div>
     </div>
@@ -219,7 +253,9 @@ const s = {
   },
   pillNum: { fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.1 },
   pillLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 },
-  filterBar: { display: 'flex', gap: 12, padding: '14px 18px', marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' },
+  filterBar: { padding: '14px 18px', marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 },
+  filterRow: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+  filterLabel: { fontSize: 12, color: 'var(--text-muted)', whiteSpace: 'nowrap' },
   tableWrap: { overflow: 'hidden', marginBottom: 20 },
   center: { padding: 48, display: 'flex', justifyContent: 'center' },
   empty: { padding: 52, textAlign: 'center', color: 'var(--text-dim)', fontSize: 14 },
@@ -229,6 +265,13 @@ const s = {
     borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700, letterSpacing: 1
   },
   timeCell: { fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 },
+  deleteBtn: {
+    background: 'none', border: '1px solid rgba(220,50,50,0.25)',
+    color: 'var(--text-muted)', borderRadius: 6,
+    width: 30, height: 30, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, transition: 'all 0.15s',
+  },
   noteBox: { padding: '16px 22px' },
   noteTitle: { fontSize: 13, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 },
   noteBody: { fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7 },
