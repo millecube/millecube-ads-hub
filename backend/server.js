@@ -160,6 +160,9 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Health (public — used by UptimeRobot) ─────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
 // ── Protect all remaining /api routes ─────────────────────────────────────────
 app.use('/api', authMiddleware);
 
@@ -738,9 +741,6 @@ app.get('/api/jobs', async (req, res) => {
     res.json(jobs.map(j => ({ ...j, _id: undefined })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// ── Health ────────────────────────────────────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
