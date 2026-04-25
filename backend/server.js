@@ -539,35 +539,56 @@ async function generateReportForClient(client, dateStart, dateStop, periodLabel)
 // ── Active cron jobs map ───────────────────────────────────────────────────────
 const activeCrons = new Map();
 
-function buildCronExpression(dayOfMonth, hour = 8, minute = 0) {
-  return `${minute} ${hour} ${dayOfMonth} * *`;
+const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+function buildCronExpression(schedule) {
+  const { frequency = 'monthly', dayOfMonth = 5, dayOfWeek = 1, hour = 8, minute = 0 } = schedule;
+  if (frequency === 'weekly') {
+    // Run every week on the chosen day-of-week
+    return `${minute} ${hour} * * ${dayOfWeek}`;
+  } else if (frequency === 'biweekly') {
+    // Run on dayOfMonth and dayOfMonth+14 each month (dayOfMonth capped at 14)
+    const d1 = Math.min(dayOfMonth, 14);
+    return `${minute} ${hour} ${d1},${d1 + 14} * *`;
+  } else {
+    return `${minute} ${hour} ${dayOfMonth} * *`;
+  }
 }
 
-function getLastMonthRange() {
+function getReportRange(frequency = 'monthly') {
   const now = new Date();
-  const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const lastDay  = new Date(now.getFullYear(), now.getMonth(), 0);
-  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const label = firstDay.toLocaleString('en-MY', { month: 'long', year: 'numeric' }).replace(' ', '');
-  return { dateStart: fmt(firstDay), dateStop: fmt(lastDay), label };
+  if (frequency === 'weekly') {
+    const stop  = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+    return { dateStart: fmt(start), dateStop: fmt(stop), label: `Weekly_${fmt(start)}_to_${fmt(stop)}` };
+  } else if (frequency === 'biweekly') {
+    const stop  = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14);
+    return { dateStart: fmt(start), dateStop: fmt(stop), label: `Biweekly_${fmt(start)}_to_${fmt(stop)}` };
+  } else {
+    const firstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastDay  = new Date(now.getFullYear(), now.getMonth(), 0);
+    const label = firstDay.toLocaleString('en-MY', { month: 'long', year: 'numeric' }).replace(' ', '');
+    return { dateStart: fmt(firstDay), dateStop: fmt(lastDay), label };
+  }
 }
 
 async function scheduleCron(schedule) {
-  const { id, clientId, dayOfMonth, hour = 8, minute = 0 } = schedule;
+  const { id, clientId, frequency = 'monthly', hour = 8, minute = 0 } = schedule;
   const clients = await readClients();
   const client  = clients.find(c => c.id === clientId);
   if (!client) return;
 
-  const expr = buildCronExpression(dayOfMonth, hour, minute);
+  const expr = buildCronExpression(schedule);
   if (activeCrons.has(id)) activeCrons.get(id).stop();
 
   const task = cron.schedule(expr, async () => {
-    const { dateStart, dateStop, label } = getLastMonthRange();
+    const { dateStart, dateStop, label } = getReportRange(frequency);
     await generateReportForClient(client, dateStart, dateStop, label);
   }, { timezone: 'Asia/Kuala_Lumpur' });
 
   activeCrons.set(id, task);
-  console.log(`[CRON] Scheduled ${client.clientCode} on day ${dayOfMonth} at ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')} MYT`);
+  console.log(`[CRON] Scheduled ${client.clientCode} | ${frequency} | cron: ${expr}`);
 }
 
 async function loadAllSchedules() {
@@ -697,10 +718,8 @@ app.get('/api/schedules', async (req, res) => {
 // POST — create schedule
 app.post('/api/schedules', async (req, res) => {
   try {
-    const { clientId, dayOfMonth, hour = 8, minute = 0, active = true } = req.body;
-    if (!clientId || !dayOfMonth) {
-      return res.status(400).json({ error: 'clientId and dayOfMonth required' });
-    }
+    const { clientId, frequency = 'monthly', dayOfMonth = 5, dayOfWeek = 1, hour = 8, minute = 0, active = true } = req.body;
+    if (!clientId) return res.status(400).json({ error: 'clientId required' });
     const clients = await readClients();
     const client = clients.find(c => c.id === clientId);
     if (!client) return res.status(404).json({ error: 'Client not found' });
@@ -708,7 +727,7 @@ app.post('/api/schedules', async (req, res) => {
     if (schedules.find(s => s.clientId === clientId)) {
       return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
     }
-    const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, dayOfMonth, hour, minute, active, createdAt: new Date().toISOString() };
+    const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, frequency, dayOfMonth, dayOfWeek, hour, minute, active, createdAt: new Date().toISOString() };
     await writeSchedules([...schedules, schedule]);
     if (active) scheduleCron(schedule);
     res.status(201).json(schedule);
