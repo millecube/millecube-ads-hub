@@ -133,6 +133,21 @@ async function ensureDefaultUser() {
     const hashed = await bcrypt.hash('Admin@millecube', 10);
     await saveUsers([{ id: uuidv4(), username: 'admin', email: 'hello@millecube.com', password: hashed, role: 'admin', createdAt: new Date().toISOString() }]);
     console.log('[AUTH] Default user created — username: admin  password: Admin@millecube');
+  } else {
+    // Patch any existing users that are missing the role field
+    let patched = false;
+    const updated = users.map((u, i) => {
+      if (!u.role) {
+        patched = true;
+        // First user (oldest) gets admin, rest get member
+        return { ...u, role: i === 0 ? 'admin' : 'member' };
+      }
+      return u;
+    });
+    if (patched) {
+      await saveUsers(updated);
+      console.log('[AUTH] Patched users missing role field');
+    }
   }
 }
 
