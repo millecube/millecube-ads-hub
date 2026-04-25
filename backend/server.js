@@ -9,63 +9,94 @@ const fs = require('fs-extra');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const cron = require('node-cron');
+const { MongoClient } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const DATA_DIR   = path.join(__dirname, '../data');
 const REPORTS_DIR = path.join(__dirname, '../reports');
-const CLIENTS_FILE = path.join(DATA_DIR, 'clients.json');
-const SCHEDULES_FILE = path.join(DATA_DIR, 'schedules.json');
-const JOBS_FILE  = path.join(DATA_DIR, 'jobs.json');
-
-// ── Init data files ────────────────────────────────────────────────────────────
-fs.ensureDirSync(DATA_DIR);
 fs.ensureDirSync(REPORTS_DIR);
-if (!fs.existsSync(CLIENTS_FILE))   fs.writeJsonSync(CLIENTS_FILE, []);
-if (!fs.existsSync(SCHEDULES_FILE)) fs.writeJsonSync(SCHEDULES_FILE, []);
-if (!fs.existsSync(JOBS_FILE))      fs.writeJsonSync(JOBS_FILE, []);
+
+// ── MongoDB ────────────────────────────────────────────────────────────────────
+let _db = null;
+async function getDb() {
+  if (_db) return _db;
+  const uri = process.env.MONGODB_URI;
+  if (!uri) throw new Error('MONGODB_URI environment variable not set');
+  const client = new MongoClient(uri);
+  await client.connect();
+  _db = client.db('millecube');
+  console.log('[DB] Connected to MongoDB');
+  return _db;
+}
+
+async function readClients() {
+  const db = await getDb();
+  return db.collection('clients').find({}).toArray();
+}
+async function writeClients(data) {
+  const db = await getDb();
+  const col = db.collection('clients');
+  await col.deleteMany({});
+  if (data.length > 0) await col.insertMany(data);
+}
+async function readSchedules() {
+  const db = await getDb();
+  return db.collection('schedules').find({}).toArray();
+}
+async function writeSchedules(data) {
+  const db = await getDb();
+  const col = db.collection('schedules');
+  await col.deleteMany({});
+  if (data.length > 0) await col.insertMany(data);
+}
+async function readJobs() {
+  const db = await getDb();
+  return db.collection('jobs').find({}).sort({ createdAt: -1 }).toArray();
+}
+async function writeJobs(data) {
+  const db = await getDb();
+  const col = db.collection('jobs');
+  await col.deleteMany({});
+  if (data.length > 0) await col.insertMany(data);
+}
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-const readClients   = () => fs.readJsonSync(CLIENTS_FILE);
-const writeClients  = (data) => fs.writeJsonSync(CLIENTS_FILE, data, { spaces: 2 });
-const readSchedules = () => fs.readJsonSync(SCHEDULES_FILE);
-const writeSchedules = (data) => fs.writeJsonSync(SCHEDULES_FILE, data, { spaces: 2 });
-const readJobs      = () => fs.readJsonSync(JOBS_FILE);
-const writeJobs     = (data) => fs.writeJsonSync(JOBS_FILE, data, { spaces: 2 });
-
-function addJob(clientId, clientCode, period, status, filePath = null, error = null) {
-  const jobs = readJobs();
+async function addJob(clientId, clientCode, period, status, filePath = null, error = null) {
+  const db = await getDb();
   const job = {
     id: uuidv4(),
     clientId,
     clientCode,
     period,
-    status,        // 'running' | 'done' | 'failed'
+    status,
     filePath,
     driveUrl: null,
     error,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  jobs.unshift(job);
-  writeJobs(jobs.slice(0, 200)); // Keep last 200
+  await db.collection('jobs').insertOne(job);
+  // Trim to last 200 jobs
+  const all = await db.collection('jobs').find({}).sort({ createdAt: 1 }).toArray();
+  if (all.length > 200) {
+    const toDelete = all.slice(0, all.length - 200).map(j => j.id);
+    await db.collection('jobs').deleteMany({ id: { $in: toDelete } });
+  }
   return job;
 }
 
-function updateJob(id, updates) {
-  const jobs = readJobs();
-  const idx = jobs.findIndex(j => j.id === id);
-  if (idx !== -1) {
-    jobs[idx] = { ...jobs[idx], ...updates, updatedAt: new Date().toISOString() };
-    writeJobs(jobs);
-  }
+async function updateJob(id, updates) {
+  const db = await getDb();
+  await db.collection('jobs').updateOne(
+    { id },
+    { $set: { ...updates, updatedAt: new Date().toISOString() } }
+  );
 }
 
 // ── Meta API Helper ────────────────────────────────────────────────────────────
@@ -317,9 +348,9 @@ function getLastMonthRange() {
   return { dateStart: fmt(firstDay), dateStop: fmt(lastDay), label };
 }
 
-function scheduleCron(schedule) {
+async function scheduleCron(schedule) {
   const { id, clientId, dayOfMonth } = schedule;
-  const clients = readClients();
+  const clients = await readClients();
   const client  = clients.find(c => c.id === clientId);
   if (!client) return;
 
@@ -337,8 +368,8 @@ function scheduleCron(schedule) {
   console.log(`[CRON] Scheduled ${client.clientCode} on day ${dayOfMonth} of each month`);
 }
 
-function loadAllSchedules() {
-  const schedules = readSchedules();
+async function loadAllSchedules() {
+  const schedules = await readSchedules();
   schedules.filter(s => s.active).forEach(scheduleCron);
 }
 
@@ -349,75 +380,81 @@ function loadAllSchedules() {
 // ── Clients ───────────────────────────────────────────────────────────────────
 
 // GET all clients
-app.get('/api/clients', (req, res) => {
-  const clients = readClients().map(c => ({
-    ...c,
-    accessToken: c.accessToken ? '••••••••' + c.accessToken.slice(-6) : null
-  }));
-  res.json(clients);
+app.get('/api/clients', async (req, res) => {
+  try {
+    const clients = (await readClients()).map(c => ({
+      ...c, _id: undefined,
+      accessToken: c.accessToken ? '••••••••' + c.accessToken.slice(-6) : null
+    }));
+    res.json(clients);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET single client
-app.get('/api/clients/:id', (req, res) => {
-  const clients = readClients();
-  const client = clients.find(c => c.id === req.params.id);
-  if (!client) return res.status(404).json({ error: 'Client not found' });
-  res.json({ ...client, accessToken: '••••••••' + client.accessToken.slice(-6) });
+app.get('/api/clients/:id', async (req, res) => {
+  try {
+    const clients = await readClients();
+    const client = clients.find(c => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    res.json({ ...client, _id: undefined, accessToken: '••••••••' + client.accessToken.slice(-6) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST — add new client
-app.post('/api/clients', (req, res) => {
-  const { clientCode, name, accessToken, adAccountId, campaignGoals, branches, primaryColor, secondaryColor } = req.body;
-  if (!clientCode || !name || !accessToken || !adAccountId) {
-    return res.status(400).json({ error: 'clientCode, name, accessToken, adAccountId are required' });
-  }
-  const clients = readClients();
-  if (clients.find(c => c.clientCode === clientCode)) {
-    return res.status(400).json({ error: `Client code "${clientCode}" already exists` });
-  }
-  const client = {
-    id: uuidv4(),
-    clientCode: clientCode.toUpperCase(),
-    name,
-    accessToken,
-    adAccountId,
-    campaignGoals: campaignGoals || [],  // [{ pattern, goal }]
-    branches: branches || [],            // [{ code, label, color }]
-    primaryColor: primaryColor || '#E8A000',
-    secondaryColor: secondaryColor || '#1A7FCC',
-    createdAt: new Date().toISOString()
-  };
-  clients.push(client);
-  writeClients(clients);
-  res.status(201).json({ ...client, accessToken: '••••••••' + accessToken.slice(-6) });
+app.post('/api/clients', async (req, res) => {
+  try {
+    const { clientCode, name, accessToken, adAccountId, campaignGoals, branches, primaryColor, secondaryColor } = req.body;
+    if (!clientCode || !name || !accessToken || !adAccountId) {
+      return res.status(400).json({ error: 'clientCode, name, accessToken, adAccountId are required' });
+    }
+    const clients = await readClients();
+    if (clients.find(c => c.clientCode === clientCode.toUpperCase())) {
+      return res.status(400).json({ error: `Client code "${clientCode}" already exists` });
+    }
+    const client = {
+      id: uuidv4(),
+      clientCode: clientCode.toUpperCase(),
+      name, accessToken, adAccountId,
+      campaignGoals: campaignGoals || [],
+      branches: branches || [],
+      primaryColor: primaryColor || '#E8A000',
+      secondaryColor: secondaryColor || '#1A7FCC',
+      createdAt: new Date().toISOString()
+    };
+    const db = await getDb();
+    await db.collection('clients').insertOne(client);
+    res.status(201).json({ ...client, _id: undefined, accessToken: '••••••••' + accessToken.slice(-6) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT — update client
-app.put('/api/clients/:id', (req, res) => {
-  const clients = readClients();
-  const idx = clients.findIndex(c => c.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Client not found' });
-  const updated = { ...clients[idx], ...req.body, id: clients[idx].id, updatedAt: new Date().toISOString() };
-  clients[idx] = updated;
-  writeClients(clients);
-  res.json({ ...updated, accessToken: '••••••••' + updated.accessToken.slice(-6) });
+app.put('/api/clients/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const existing = await db.collection('clients').findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ error: 'Client not found' });
+    const updated = { ...existing, ...req.body, id: existing.id, updatedAt: new Date().toISOString() };
+    delete updated._id;
+    await db.collection('clients').replaceOne({ id: req.params.id }, updated);
+    res.json({ ...updated, accessToken: '••••••••' + updated.accessToken.slice(-6) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE — remove client
-app.delete('/api/clients/:id', (req, res) => {
-  let clients = readClients();
-  clients = clients.filter(c => c.id !== req.params.id);
-  writeClients(clients);
-  res.json({ ok: true });
+app.delete('/api/clients/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.collection('clients').deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST — verify Meta API credentials
 app.post('/api/clients/:id/verify', async (req, res) => {
-  const clients = readClients();
-  const client = clients.find(c => c.id === req.params.id);
-  if (!client) return res.status(404).json({ error: 'Client not found' });
-
   try {
+    const db = await getDb();
+    const client = await db.collection('clients').findOne({ id: req.params.id });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
     const response = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}`, {
       params: { access_token: client.accessToken, fields: 'name,account_status,currency' }
     });
@@ -431,98 +468,95 @@ app.post('/api/clients/:id/verify', async (req, res) => {
 
 // POST — generate report manually
 app.post('/api/reports/generate', async (req, res) => {
-  const { clientId, dateStart, dateStop, periodLabel } = req.body;
-  if (!clientId || !dateStart || !dateStop) {
-    return res.status(400).json({ error: 'clientId, dateStart, dateStop required' });
-  }
-
-  const clients = readClients();
-  const client = clients.find(c => c.id === clientId);
-  if (!client) return res.status(404).json({ error: 'Client not found' });
-
-  const label = periodLabel || `${dateStart}_to_${dateStop}`;
-
-  // Respond immediately, process in background
-  res.json({ ok: true, message: 'Report generation started', clientCode: client.clientCode, period: label });
-
-  generateReportForClient(client, dateStart, dateStop, label);
+  try {
+    const { clientId, dateStart, dateStop, periodLabel } = req.body;
+    if (!clientId || !dateStart || !dateStop) {
+      return res.status(400).json({ error: 'clientId, dateStart, dateStop required' });
+    }
+    const db = await getDb();
+    const client = await db.collection('clients').findOne({ id: clientId });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    const label = periodLabel || `${dateStart}_to_${dateStop}`;
+    res.json({ ok: true, message: 'Report generation started', clientCode: client.clientCode, period: label });
+    generateReportForClient(client, dateStart, dateStop, label);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Schedules ─────────────────────────────────────────────────────────────────
 
 // GET all schedules
-app.get('/api/schedules', (req, res) => {
-  res.json(readSchedules());
+app.get('/api/schedules', async (req, res) => {
+  try {
+    const schedules = (await readSchedules()).map(s => ({ ...s, _id: undefined }));
+    res.json(schedules);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST — create schedule
-app.post('/api/schedules', (req, res) => {
-  const { clientId, dayOfMonth, active = true } = req.body;
-  if (!clientId || !dayOfMonth) {
-    return res.status(400).json({ error: 'clientId and dayOfMonth required' });
-  }
-
-  const schedules = readSchedules();
-  const existing = schedules.find(s => s.clientId === clientId);
-  if (existing) return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
-
-  const clients = readClients();
-  const client = clients.find(c => c.id === clientId);
-  if (!client) return res.status(404).json({ error: 'Client not found' });
-
-  const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, dayOfMonth, active, createdAt: new Date().toISOString() };
-  schedules.push(schedule);
-  writeSchedules(schedules);
-
-  if (active) scheduleCron(schedule);
-
-  res.status(201).json(schedule);
+app.post('/api/schedules', async (req, res) => {
+  try {
+    const { clientId, dayOfMonth, active = true } = req.body;
+    if (!clientId || !dayOfMonth) {
+      return res.status(400).json({ error: 'clientId and dayOfMonth required' });
+    }
+    const db = await getDb();
+    const existing = await db.collection('schedules').findOne({ clientId });
+    if (existing) return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
+    const client = await db.collection('clients').findOne({ id: clientId });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, dayOfMonth, active, createdAt: new Date().toISOString() };
+    await db.collection('schedules').insertOne(schedule);
+    if (active) scheduleCron(schedule);
+    res.status(201).json({ ...schedule, _id: undefined });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT — update schedule
-app.put('/api/schedules/:id', (req, res) => {
-  const schedules = readSchedules();
-  const idx = schedules.findIndex(s => s.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Schedule not found' });
-
-  const updated = { ...schedules[idx], ...req.body, id: schedules[idx].id, updatedAt: new Date().toISOString() };
-  schedules[idx] = updated;
-  writeSchedules(schedules);
-
-  // Re-apply cron
-  if (activeCrons.has(updated.id)) activeCrons.get(updated.id).stop();
-  if (updated.active) scheduleCron(updated);
-
-  res.json(updated);
+app.put('/api/schedules/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const existing = await db.collection('schedules').findOne({ id: req.params.id });
+    if (!existing) return res.status(404).json({ error: 'Schedule not found' });
+    const updated = { ...existing, ...req.body, id: existing.id, updatedAt: new Date().toISOString() };
+    delete updated._id;
+    await db.collection('schedules').replaceOne({ id: req.params.id }, updated);
+    if (activeCrons.has(updated.id)) activeCrons.get(updated.id).stop();
+    if (updated.active) scheduleCron(updated);
+    res.json({ ...updated, _id: undefined });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE — remove schedule
-app.delete('/api/schedules/:id', (req, res) => {
-  let schedules = readSchedules();
-  const schedule = schedules.find(s => s.id === req.params.id);
-  if (schedule && activeCrons.has(schedule.id)) {
-    activeCrons.get(schedule.id).stop();
-    activeCrons.delete(schedule.id);
-  }
-  schedules = schedules.filter(s => s.id !== req.params.id);
-  writeSchedules(schedules);
-  res.json({ ok: true });
+app.delete('/api/schedules/:id', async (req, res) => {
+  try {
+    const db = await getDb();
+    const schedule = await db.collection('schedules').findOne({ id: req.params.id });
+    if (schedule && activeCrons.has(schedule.id)) {
+      activeCrons.get(schedule.id).stop();
+      activeCrons.delete(schedule.id);
+    }
+    await db.collection('schedules').deleteOne({ id: req.params.id });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Jobs / History ────────────────────────────────────────────────────────────
 
-app.get('/api/jobs', (req, res) => {
-  const { clientId, limit = 50 } = req.query;
-  let jobs = readJobs();
-  if (clientId) jobs = jobs.filter(j => j.clientId === clientId);
-  res.json(jobs.slice(0, parseInt(limit)));
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const { clientId, limit = 200 } = req.query;
+    const db = await getDb();
+    const query = clientId ? { clientId } : {};
+    const jobs = await db.collection('jobs').find(query).sort({ createdAt: -1 }).limit(parseInt(limit)).toArray();
+    res.json(jobs.map(j => ({ ...j, _id: undefined })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Health ────────────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🟢 Millecube Ads Hub Backend running on http://localhost:${PORT}`);
-  loadAllSchedules();
+  try { await loadAllSchedules(); } catch (e) { console.error('[CRON] Failed to load schedules:', e.message); }
 });

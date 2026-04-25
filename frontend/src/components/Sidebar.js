@@ -1,6 +1,5 @@
 import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { logocolor } from '../assets/brandAssets';
 
 const nav = [
   { to: '/',           label: 'Dashboard',   icon: '◈' },
@@ -17,11 +16,7 @@ export default function Sidebar() {
     <aside style={styles.sidebar}>
       {/* Logo */}
       <div style={styles.logoWrap}>
-        <img src={logocolor} alt="Millecube" style={styles.logo} />
-        <div>
-          <div style={styles.logoTitle}>ADS HUB</div>
-          <div style={styles.logoSub}>by Millecube Digital</div>
-        </div>
+        <img src="/logo.png" alt="Millecube" style={styles.logo} />
       </div>
 
       <div style={styles.divider} />
@@ -75,18 +70,10 @@ const styles = {
     zIndex: 100,
   },
   logoWrap: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    padding: '0 20px 0 20px', marginBottom: 4
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: '0 16px', marginBottom: 4
   },
-  logo: { width: 36, height: 36, objectFit: 'contain' },
-  logoTitle: {
-    fontSize: 13, fontWeight: 800, color: '#32cd32',
-    letterSpacing: 3, fontFamily: 'Montserrat, sans-serif'
-  },
-  logoSub: {
-    fontSize: 9, color: 'rgba(232,245,233,0.35)',
-    letterSpacing: 1, fontFamily: 'Montserrat, sans-serif', marginTop: 1
-  },
+  logo: { width: 160, height: 'auto', objectFit: 'contain' },
   divider: { borderTop: '1px solid rgba(50,205,50,0.12)', margin: '18px 20px' },
   nav: { display: 'flex', flexDirection: 'column', gap: 2, padding: '0 10px' },
   navItem: {
