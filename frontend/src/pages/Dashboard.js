@@ -51,7 +51,7 @@ export default function Dashboard() {
         {kpis.map(k => (
           <div key={k.label} className="glass stat-card" style={styles.kpiCard}>
             <div style={{ ...styles.kpiIcon, color: k.danger ? '#ff4d4d' : '#32cd32' }}>{k.icon}</div>
-            <div style={{ ...styles.kpiValue, color: k.danger ? '#ff4d4d' : '#e8f5e9' }}>{loading ? '—' : k.value}</div>
+            <div style={{ ...styles.kpiValue, color: k.danger ? 'var(--danger)' : 'var(--text-primary)' }}>{loading ? '—' : k.value}</div>
             <div style={styles.kpiLabel}>{k.label}</div>
             <div style={styles.kpiSub}>{k.sub}</div>
           </div>
@@ -89,7 +89,7 @@ export default function Dashboard() {
                     <td>
                       <span style={styles.codeTag}>{job.clientCode}</span>
                     </td>
-                    <td style={{ color: 'rgba(232,245,233,0.7)', fontSize: 13 }}>{job.period}</td>
+                    <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{job.period}</td>
                     <td>
                       <span style={{
                         display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -100,7 +100,7 @@ export default function Dashboard() {
                         {statusLabel[job.status] || job.status}
                       </span>
                     </td>
-                    <td style={{ color: 'rgba(232,245,233,0.4)', fontSize: 12 }}>
+                    <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>
                       {new Date(job.createdAt).toLocaleString('en-MY', { dateStyle: 'short', timeStyle: 'short' })}
                     </td>
                     <td>
@@ -165,8 +165,8 @@ const styles = {
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
     marginBottom: 32
   },
-  title: { fontSize: 28, fontWeight: 800, color: '#e8f5e9', letterSpacing: -0.5 },
-  sub: { fontSize: 13, color: 'rgba(232,245,233,0.4)', marginTop: 4 },
+  title: { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub: { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
   liveDot: {
     display: 'flex', alignItems: 'center', gap: 8,
     background: 'rgba(50,205,50,0.08)', border: '1px solid rgba(50,205,50,0.2)',
@@ -181,16 +181,16 @@ const styles = {
   kpiCard: { textAlign: 'center', padding: '24px 20px' },
   kpiIcon: { fontSize: 22, marginBottom: 8 },
   kpiValue: { fontSize: 36, fontWeight: 800, lineHeight: 1.1 },
-  kpiLabel: { fontSize: 12, fontWeight: 700, color: 'rgba(232,245,233,0.5)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.8 },
-  kpiSub: { fontSize: 11, color: 'rgba(232,245,233,0.25)', marginTop: 2 },
+  kpiLabel: { fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.8 },
+  kpiSub: { fontSize: 11, color: 'var(--text-dim)', marginTop: 2 },
   section: { marginBottom: 32 },
   sectionHeader: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 },
-  sectionTitle: { fontSize: 16, fontWeight: 700, color: '#e8f5e9' },
+  sectionTitle: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' },
   tableWrap: { overflow: 'hidden' },
   loading: { padding: 40, display: 'flex', justifyContent: 'center' },
   empty: {
     padding: 48, textAlign: 'center',
-    color: 'rgba(232,245,233,0.3)', fontSize: 14
+    color: 'var(--text-dim)', fontSize: 14
   },
   emptyIcon: { fontSize: 32, marginBottom: 12 },
   codeTag: {
@@ -204,6 +204,6 @@ const styles = {
     fontSize: 13, fontWeight: 800, color: '#32cd32', letterSpacing: 2,
     marginBottom: 4
   },
-  clientName: { fontSize: 14, fontWeight: 600, color: '#e8f5e9' },
-  clientMeta: { fontSize: 11, color: 'rgba(232,245,233,0.35)' }
+  clientName: { fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' },
+  clientMeta: { fontSize: 11, color: 'var(--text-muted)' }
 };

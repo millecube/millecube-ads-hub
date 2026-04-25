@@ -282,8 +282,8 @@ export default function Generate() {
 const s = {
   page: { padding: '32px 36px', maxWidth: 1100 },
   header: { marginBottom: 28 },
-  title: { fontSize: 28, fontWeight: 800, color: '#e8f5e9', letterSpacing: -0.5 },
-  sub: { fontSize: 13, color: 'rgba(232,245,233,0.4)', marginTop: 4 },
+  title: { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub: { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
   grid: { display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 20, alignItems: 'start' },
   left: { display: 'flex', flexDirection: 'column', gap: 16 },
   right: { display: 'flex', flexDirection: 'column', gap: 16 },
@@ -294,15 +294,15 @@ const s = {
     border: '1px solid rgba(50,205,50,0.3)',
     borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 800, letterSpacing: 1
   },
-  stepTitle: { fontSize: 15, fontWeight: 700, color: '#e8f5e9', flex: 1 },
+  stepTitle: { fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', flex: 1 },
   stepActions: { display: 'flex', gap: 8 },
-  noClients: { color: 'rgba(232,245,233,0.35)', fontSize: 13, padding: '8px 0' },
+  noClients: { color: 'var(--text-muted)', fontSize: 13, padding: '8px 0' },
   clientList: { display: 'flex', flexDirection: 'column', gap: 8 },
   clientRow: {
     display: 'flex', alignItems: 'center', gap: 14,
     padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
-    border: '1px solid rgba(255,255,255,0.06)',
-    background: 'rgba(0,0,0,0.15)', transition: 'all 0.15s'
+    border: '1px solid var(--border)',
+    background: 'var(--glass-bg)', transition: 'all 0.15s'
   },
   clientRowSelected: {
     border: '1px solid rgba(50,205,50,0.4)',
@@ -310,29 +310,29 @@ const s = {
   },
   checkbox: {
     width: 20, height: 20, borderRadius: 5,
-    border: '1.5px solid rgba(232,245,233,0.25)',
+    border: '1.5px solid var(--border)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 11, fontWeight: 700, color: '#051c14',
     flexShrink: 0, transition: 'all 0.15s'
   },
   checkboxOn: { background: '#32cd32', border: '1.5px solid #32cd32' },
   clientRowCode: { fontSize: 13, fontWeight: 800, color: '#32cd32', letterSpacing: 1 },
-  clientRowName: { fontSize: 12, color: 'rgba(232,245,233,0.6)', marginTop: 2 },
-  clientRowAcct: { fontSize: 10, color: 'rgba(232,245,233,0.25)', fontFamily: 'monospace', marginLeft: 'auto', flexShrink: 0 },
+  clientRowName: { fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 },
+  clientRowAcct: { fontSize: 10, color: 'var(--text-dim)', fontFamily: 'monospace', marginLeft: 'auto', flexShrink: 0 },
   modeTabs: { display: 'flex', gap: 8, marginBottom: 16 },
   customRange: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
   summary: { display: 'flex', flexDirection: 'column', gap: 10 },
   summaryRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
-  summaryKey: { fontSize: 12, color: 'rgba(232,245,233,0.4)', flexShrink: 0 },
-  summaryVal: { fontSize: 12, color: '#e8f5e9', fontWeight: 600, textAlign: 'right' },
+  summaryKey: { fontSize: 12, color: 'var(--text-muted)', flexShrink: 0 },
+  summaryVal: { fontSize: 12, color: 'var(--text-primary)', fontWeight: 600, textAlign: 'right' },
   infoTitle: { fontSize: 12, fontWeight: 700, color: '#32cd32', letterSpacing: 0.8, marginBottom: 12, textTransform: 'uppercase' },
-  infoList: { paddingLeft: 18, color: 'rgba(232,245,233,0.55)', fontSize: 13, lineHeight: 1.8, display: 'flex', flexDirection: 'column', gap: 4 },
+  infoList: { paddingLeft: 18, color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.8, display: 'flex', flexDirection: 'column', gap: 4 },
   codeBlock: {
-    background: 'rgba(0,0,0,0.35)', borderRadius: 6, padding: '10px 14px',
+    background: 'var(--input-bg)', borderRadius: 6, padding: '10px 14px',
     fontFamily: 'monospace', fontSize: 11, color: '#32cd32', marginBottom: 10,
-    border: '1px solid rgba(50,205,50,0.15)'
+    border: '1px solid var(--border)'
   },
-  exampleRow: { fontSize: 12, color: 'rgba(232,245,233,0.45)', fontFamily: 'monospace', marginBottom: 4 },
+  exampleRow: { fontSize: 12, color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: 4 },
   codeTag: {
     background: 'rgba(50,205,50,0.12)', color: '#32cd32',
     border: '1px solid rgba(50,205,50,0.25)',

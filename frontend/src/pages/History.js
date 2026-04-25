@@ -122,7 +122,7 @@ export default function History() {
                   <td>
                     <span style={s.codeTag}>{job.clientCode}</span>
                   </td>
-                  <td style={{ fontSize: 13, color: 'rgba(232,245,233,0.75)' }}>{job.period}</td>
+                  <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{job.period}</td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                       {job.status === 'running' && <div className="spinner" style={{ width: 12, height: 12 }} />}
@@ -143,7 +143,7 @@ export default function History() {
                   <td style={s.timeCell}>
                     {new Date(job.createdAt).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}
                     <br />
-                    <span style={{ color: 'rgba(232,245,233,0.3)' }}>
+                    <span style={{ color: 'var(--text-dim)' }}>
                       {new Date(job.createdAt).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </td>
@@ -164,9 +164,9 @@ export default function History() {
                         ↓ .docx
                       </a>
                     ) : job.status === 'running' ? (
-                      <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.3)' }}>Generating…</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Generating…</span>
                     ) : (
-                      <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.2)' }}>—</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>—</span>
                     )}
                   </td>
                   <td>
@@ -181,7 +181,7 @@ export default function History() {
                         ↗ Drive
                       </a>
                     ) : (
-                      <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.2)' }}>—</span>
+                      <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>—</span>
                     )}
                   </td>
                 </tr>
@@ -208,30 +208,30 @@ export default function History() {
 const s = {
   page: { padding: '32px 36px', maxWidth: 1100 },
   header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 },
-  title: { fontSize: 28, fontWeight: 800, color: '#e8f5e9', letterSpacing: -0.5 },
-  sub: { fontSize: 13, color: 'rgba(232,245,233,0.4)', marginTop: 4 },
+  title: { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub: { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
   pills: { display: 'flex', gap: 12, marginBottom: 20 },
   pill: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
     padding: '12px 22px', cursor: 'pointer',
-    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+    background: 'var(--glass-bg)', border: '1px solid var(--border)',
     borderRadius: 10, minWidth: 80, transition: 'all 0.15s'
   },
-  pillNum: { fontSize: 24, fontWeight: 800, color: '#e8f5e9', lineHeight: 1.1 },
-  pillLabel: { fontSize: 11, color: 'rgba(232,245,233,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 },
+  pillNum: { fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.1 },
+  pillLabel: { fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8 },
   filterBar: { display: 'flex', gap: 12, padding: '14px 18px', marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' },
   tableWrap: { overflow: 'hidden', marginBottom: 20 },
   center: { padding: 48, display: 'flex', justifyContent: 'center' },
-  empty: { padding: 52, textAlign: 'center', color: 'rgba(232,245,233,0.3)', fontSize: 14 },
+  empty: { padding: 52, textAlign: 'center', color: 'var(--text-dim)', fontSize: 14 },
   codeTag: {
     background: 'rgba(50,205,50,0.12)', color: '#32cd32',
     border: '1px solid rgba(50,205,50,0.25)',
     borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700, letterSpacing: 1
   },
-  timeCell: { fontSize: 12, color: 'rgba(232,245,233,0.55)', lineHeight: 1.6 },
+  timeCell: { fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 },
   noteBox: { padding: '16px 22px' },
-  noteTitle: { fontSize: 13, fontWeight: 700, color: '#6bc71f', marginBottom: 8 },
-  noteBody: { fontSize: 13, color: 'rgba(232,245,233,0.5)', lineHeight: 1.7 },
+  noteTitle: { fontSize: 13, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 },
+  noteBody: { fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7 },
   codePath: {
     fontFamily: 'monospace', fontSize: 12, color: '#32cd32',
     background: 'rgba(50,205,50,0.08)', borderRadius: 4, padding: '1px 6px'

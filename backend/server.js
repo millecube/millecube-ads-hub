@@ -479,7 +479,7 @@ async function uploadToDrive(filePath, fileName, clientCode) {
 const reportGenerator = require('./reportGenerator');
 
 async function generateReportForClient(client, dateStart, dateStop, periodLabel) {
-  const job = addJob(client.id, client.clientCode, periodLabel, 'running');
+  const job = await addJob(client.id, client.clientCode, periodLabel, 'running');
 
   try {
     console.log(`[REPORT] Generating for ${client.clientCode} | ${periodLabel}`);

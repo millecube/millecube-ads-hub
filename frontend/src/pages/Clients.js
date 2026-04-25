@@ -121,7 +121,7 @@ function ClientModal({ client, onClose, onSaved }) {
             </div>
             <div className="form-group">
               <label className="form-label">
-                Access Token {isEdit && <span style={{ color: 'rgba(232,245,233,0.4)' }}>(leave blank to keep existing)</span>}
+                Access Token {isEdit && <span style={{ color: 'var(--text-muted)' }}>(leave blank to keep existing)</span>}
               </label>
               <input className="form-input" type="password"
                 placeholder={isEdit ? '••••••• (unchanged)' : 'EAAxxxxxxxxxxxxxxxx...'}
@@ -255,8 +255,8 @@ export default function Clients() {
                 <tr key={c.id}>
                   <td><span style={s.codeTag}>{c.clientCode}</span></td>
                   <td style={{ fontWeight: 600 }}>{c.name}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(232,245,233,0.5)' }}>{c.adAccountId}</td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'rgba(232,245,233,0.35)' }}>{c.accessToken}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>{c.adAccountId}</td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)' }}>{c.accessToken}</td>
                   <td>
                     <span className="badge badge-dim">{c.campaignGoals?.length || 0} rules</span>
                   </td>
@@ -299,11 +299,11 @@ export default function Clients() {
 const s = {
   page: { padding: '32px 36px', maxWidth: 1100 },
   header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 28 },
-  title: { fontSize: 28, fontWeight: 800, color: '#e8f5e9', letterSpacing: -0.5 },
-  sub: { fontSize: 13, color: 'rgba(232,245,233,0.4)', marginTop: 4 },
+  title: { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub: { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
   tableWrap: { overflow: 'hidden', marginBottom: 24 },
   loading: { padding: 48, display: 'flex', justifyContent: 'center' },
-  empty: { padding: 60, textAlign: 'center', color: 'rgba(232,245,233,0.35)', fontSize: 14 },
+  empty: { padding: 60, textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 },
   codeTag: {
     background: 'rgba(50,205,50,0.12)', color: '#32cd32',
     border: '1px solid rgba(50,205,50,0.25)',
@@ -311,17 +311,17 @@ const s = {
   },
   infoBox: { padding: '20px 24px' },
   infoTitle: { fontSize: 13, fontWeight: 700, color: '#32cd32', marginBottom: 12 },
-  infoList: { paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, color: 'rgba(232,245,233,0.6)', fontSize: 13, lineHeight: 1.6 },
+  infoList: { paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.6 },
 };
 
 const ms = {
   box: { maxWidth: 680, width: '100%' },
   modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  modalTitle: { fontSize: 20, fontWeight: 800, color: '#e8f5e9' },
+  modalTitle: { fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' },
   section: { marginBottom: 24, paddingBottom: 24, borderBottom: '1px solid rgba(50,205,50,0.1)' },
   sectionLabel: { fontSize: 11, fontWeight: 700, color: '#32cd32', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 14 },
   row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 },
-  hint: { fontSize: 11, color: 'rgba(232,245,233,0.3)', marginTop: 4 },
+  hint: { fontSize: 11, color: 'var(--text-dim)', marginTop: 4 },
   patternRow: { display: 'flex', gap: 10, marginBottom: 10, alignItems: 'center' },
   colorRow: { display: 'flex', gap: 10, alignItems: 'center' },
   colorPicker: { width: 44, height: 38, padding: 2, borderRadius: 6, border: '1px solid rgba(50,205,50,0.2)', background: 'transparent', cursor: 'pointer' },
