@@ -98,36 +98,40 @@ app.use(cors());
 app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
 
-// ── Auth Helpers ───────────────────────────────────────────────────────────────
-async function getUser() {
+// ── Auth Helpers (multi-user) ──────────────────────────────────────────────────
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+
+async function getUsers() {
+  if (usingMongo()) {
+    try { const db = await getDb(); return db.collection('users').find({}).toArray(); } catch {}
+  }
+  if (!fs.existsSync(USERS_FILE)) return [];
+  return fs.readJsonSync(USERS_FILE);
+}
+
+async function getUserByUsername(username) {
+  const users = await getUsers();
+  return users.find(u => u.username === username) || null;
+}
+
+async function saveUsers(users) {
+  const clean = users.map(({ _id, ...u }) => u);
   if (usingMongo()) {
     try {
       const db = await getDb();
-      return db.collection('users').findOne({});
-    } catch {
-      // MongoDB failed — fall through to file
-    }
+      await db.collection('users').deleteMany({});
+      if (clean.length) await db.collection('users').insertMany(clean);
+      return;
+    } catch {}
   }
-  if (!fs.existsSync(FILE.user)) return null;
-  return fs.readJsonSync(FILE.user);
-}
-
-async function saveUser(user) {
-  const { _id, ...clean } = user;
-  if (usingMongo()) {
-    const db = await getDb();
-    await db.collection('users').deleteMany({});
-    await db.collection('users').insertOne(clean);
-  } else {
-    fs.writeJsonSync(FILE.user, clean, { spaces: 2 });
-  }
+  fs.writeJsonSync(USERS_FILE, clean, { spaces: 2 });
 }
 
 async function ensureDefaultUser() {
-  const existing = await getUser();
-  if (!existing) {
+  const users = await getUsers();
+  if (users.length === 0) {
     const hashed = await bcrypt.hash('Admin@millecube', 10);
-    await saveUser({ id: uuidv4(), username: 'admin', email: 'hello@millecube.com', password: hashed, createdAt: new Date().toISOString() });
+    await saveUsers([{ id: uuidv4(), username: 'admin', email: 'hello@millecube.com', password: hashed, role: 'admin', createdAt: new Date().toISOString() }]);
     console.log('[AUTH] Default user created — username: admin  password: Admin@millecube');
   }
 }
@@ -147,12 +151,12 @@ function authMiddleware(req, res, next) {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    const user = await getUser();
-    if (!user || user.username !== username) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = await getUserByUsername(username);
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
-    res.json({ token, user: { username: user.username, email: user.email } });
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    res.json({ token, user: { id: user.id, username: user.username, email: user.email, role: user.role } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -161,8 +165,9 @@ app.use('/api', authMiddleware);
 
 app.get('/api/auth/me', async (req, res) => {
   try {
-    const user = await getUser();
-    res.json({ username: user.username, email: user.email });
+    const user = await getUserByUsername(req.user.username);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ id: user.id, username: user.username, email: user.email, role: user.role });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -170,11 +175,17 @@ app.put('/api/auth/profile', async (req, res) => {
   try {
     const { username, email } = req.body;
     if (!username) return res.status(400).json({ error: 'Username is required' });
-    const user = await getUser();
-    const updated = { ...user, username, email, updatedAt: new Date().toISOString() };
-    await saveUser(updated);
-    const token = jwt.sign({ id: user.id, username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
-    res.json({ ok: true, token, user: { username, email } });
+    const users = await getUsers();
+    const idx = users.findIndex(u => u.username === req.user.username);
+    if (idx === -1) return res.status(404).json({ error: 'User not found' });
+    // Check username conflict (if changing username)
+    if (username !== req.user.username && users.find(u => u.username === username)) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
+    users[idx] = { ...users[idx], username, email, updatedAt: new Date().toISOString() };
+    await saveUsers(users);
+    const token = jwt.sign({ id: users[idx].id, username, role: users[idx].role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    res.json({ ok: true, token, user: { id: users[idx].id, username, email, role: users[idx].role } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -182,11 +193,55 @@ app.put('/api/auth/password', async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
-    const user = await getUser();
-    const match = await bcrypt.compare(currentPassword, user.password);
+    const users = await getUsers();
+    const idx = users.findIndex(u => u.username === req.user.username);
+    if (idx === -1) return res.status(404).json({ error: 'User not found' });
+    const match = await bcrypt.compare(currentPassword, users[idx].password);
     if (!match) return res.status(400).json({ error: 'Current password is incorrect' });
-    const hashed = await bcrypt.hash(newPassword, 10);
-    await saveUser({ ...user, password: hashed, updatedAt: new Date().toISOString() });
+    users[idx] = { ...users[idx], password: await bcrypt.hash(newPassword, 10), updatedAt: new Date().toISOString() };
+    await saveUsers(users);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Team User Management (admin only) ─────────────────────────────────────────
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  next();
+}
+
+app.get('/api/auth/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await getUsers();
+    res.json(users.map(u => ({ id: u.id, username: u.username, email: u.email, role: u.role, createdAt: u.createdAt })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/users', requireAdmin, async (req, res) => {
+  try {
+    const { username, email, password, role } = req.body;
+    if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const users = await getUsers();
+    if (users.find(u => u.username === username)) return res.status(400).json({ error: 'Username already exists' });
+    const newUser = {
+      id: uuidv4(), username, email: email || '',
+      password: await bcrypt.hash(password, 10),
+      role: role === 'admin' ? 'admin' : 'member',
+      createdAt: new Date().toISOString()
+    };
+    await saveUsers([...users, newUser]);
+    res.json({ ok: true, user: { id: newUser.id, username, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/auth/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const users = await getUsers();
+    const target = users.find(u => u.id === req.params.id);
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.username === req.user.username) return res.status(400).json({ error: 'Cannot delete your own account' });
+    await saveUsers(users.filter(u => u.id !== req.params.id));
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

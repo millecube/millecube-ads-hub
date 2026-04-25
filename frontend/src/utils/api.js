@@ -55,6 +55,9 @@ export const authAPI = {
   me:             ()     => api.get('/auth/me').then(r => r.data),
   updateProfile:  (data) => api.put('/auth/profile', data).then(r => r.data),
   changePassword: (data) => api.put('/auth/password', data).then(r => r.data),
+  listUsers:      ()     => api.get('/auth/users').then(r => r.data),
+  createUser:     (data) => api.post('/auth/users', data).then(r => r.data),
+  deleteUser:     (id)   => api.delete(`/auth/users/${id}`).then(r => r.data),
 };
 
 export const backendUrl = (filePath) => {
