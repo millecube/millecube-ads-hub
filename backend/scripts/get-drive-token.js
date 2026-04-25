@@ -36,11 +36,18 @@ const server = http.createServer(async (req, res) => {
     res.end('<h2>Success! Check your terminal for the token.</h2>');
     server.close();
 
-    console.log('\n=== ADD THESE TO RENDER ENVIRONMENT VARIABLES ===\n');
-    console.log(`GOOGLE_CLIENT_ID     = ${CLIENT_ID}`);
-    console.log(`GOOGLE_CLIENT_SECRET = ${CLIENT_SECRET}`);
-    console.log(`GOOGLE_REFRESH_TOKEN = ${tokens.refresh_token}`);
-    console.log('\n=================================================\n');
+    const output = [
+      '\n=== ADD THESE TO RENDER ENVIRONMENT VARIABLES ===\n',
+      `GOOGLE_CLIENT_ID     = ${CLIENT_ID}`,
+      `GOOGLE_CLIENT_SECRET = ${CLIENT_SECRET}`,
+      `GOOGLE_REFRESH_TOKEN = ${tokens.refresh_token}`,
+      '\n=================================================\n'
+    ].join('\n');
+    console.log(output);
+    require('fs').writeFileSync(
+      require('path').join(__dirname, 'token-output.txt'),
+      output
+    );
   } catch (err) {
     res.end('Error: ' + err.message);
     console.error(err);

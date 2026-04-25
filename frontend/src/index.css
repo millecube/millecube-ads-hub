@@ -1,29 +1,66 @@
 /* ──────────────────────────────────────────────────────────────
    Millecube Ads Hub — Global Styles
-   Brand: dark green tech glassmorphism
+   Supports dark (default) and light themes via data-theme attr
    ────────────────────────────────────────────────────────────── */
 
-:root {
-  --green:        #32cd32;
-  --green-light:  #6bc71f;
-  --green-dark:   #07503c;
-  --green-deep:   #03281e;
-  --bg:           #051c14;
-  --bg2:          #07241a;
-  --glass-bg:     rgba(255,255,255,0.045);
-  --glass-border: rgba(50,205,50,0.18);
-  --glass-hover:  rgba(255,255,255,0.08);
-  --text:         #e8f5e9;
-  --text-muted:   rgba(232,245,233,0.5);
-  --text-dim:     rgba(232,245,233,0.3);
-  --accent:       #32cd32;
-  --danger:       #ff4d4d;
-  --warning:      #f5a623;
-  --success:      #32cd32;
-  --shadow:       0 8px 32px rgba(0,0,0,0.45);
-  --radius:       14px;
-  --radius-sm:    8px;
-  --font:         'Montserrat', sans-serif;
+:root, [data-theme="dark"] {
+  --green:          #32cd32;
+  --green-light:    #6bc71f;
+  --green-dark:     #07503c;
+  --accent:         #32cd32;
+  --bg:             #051c14;
+  --bg2:            #07241a;
+  --sidebar-bg:     rgba(3,20,14,0.9);
+  --glass-bg:       rgba(255,255,255,0.045);
+  --glass-border:   rgba(50,205,50,0.18);
+  --glass-hover:    rgba(255,255,255,0.08);
+  --border:         rgba(50,205,50,0.18);
+  --text-primary:   #e8f5e9;
+  --text-secondary: rgba(232,245,233,0.7);
+  --text-muted:     rgba(232,245,233,0.45);
+  --text-dim:       rgba(232,245,233,0.25);
+  --text:           #e8f5e9;
+  --input-bg:       rgba(0,0,0,0.35);
+  --input-option-bg:#07241a;
+  --table-row-alt:  rgba(255,255,255,0.02);
+  --table-hover:    rgba(255,255,255,0.05);
+  --danger:         #ff4d4d;
+  --warning:        #f5a623;
+  --success:        #32cd32;
+  --shadow:         0 8px 32px rgba(0,0,0,0.45);
+  --radius:         14px;
+  --radius-sm:      8px;
+  --font:           'Montserrat', sans-serif;
+}
+
+[data-theme="light"] {
+  --green:          #32cd32;
+  --green-light:    #6bc71f;
+  --green-dark:     #07503c;
+  --accent:         #07503c;
+  --bg:             #f0f7f2;
+  --bg2:            #e6f0ea;
+  --sidebar-bg:     rgba(255,255,255,0.95);
+  --glass-bg:       rgba(255,255,255,0.85);
+  --glass-border:   rgba(7,80,60,0.15);
+  --glass-hover:    rgba(7,80,60,0.06);
+  --border:         rgba(7,80,60,0.15);
+  --text-primary:   #0d1f15;
+  --text-secondary: #2d5a3d;
+  --text-muted:     #6b8f78;
+  --text-dim:       #a0b8a8;
+  --text:           #0d1f15;
+  --input-bg:       rgba(255,255,255,0.9);
+  --input-option-bg:#ffffff;
+  --table-row-alt:  rgba(7,80,60,0.03);
+  --table-hover:    rgba(7,80,60,0.06);
+  --danger:         #cc3333;
+  --warning:        #cc7700;
+  --success:        #07503c;
+  --shadow:         0 4px 20px rgba(0,0,0,0.1);
+  --radius:         14px;
+  --radius-sm:      8px;
+  --font:           'Montserrat', sans-serif;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,10 +72,11 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  transition: background 0.3s, color 0.3s;
 }
 
-/* Animated mesh background */
-body::before {
+/* Background mesh — dark mode only */
+[data-theme="dark"] body::before {
   content: '';
   position: fixed;
   inset: 0;
@@ -49,6 +87,8 @@ body::before {
   pointer-events: none;
   z-index: 0;
 }
+
+[data-theme="light"] body::before { display: none; }
 
 #root { position: relative; z-index: 1; }
 
@@ -99,10 +139,10 @@ body::before {
 .btn-ghost {
   background: var(--glass-bg);
   color: var(--text);
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--border);
   backdrop-filter: blur(10px);
 }
-.btn-ghost:hover { background: var(--glass-hover); border-color: var(--green); }
+.btn-ghost:hover { background: var(--glass-hover); border-color: var(--accent); }
 
 .btn-danger {
   background: rgba(255,77,77,0.15);
@@ -123,21 +163,21 @@ body::before {
 .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
 .form-label { font-size: 12px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.5px; text-transform: uppercase; }
 .form-input {
-  background: rgba(0,0,0,0.3);
+  background: var(--input-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   padding: 10px 14px;
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, background 0.2s;
   outline: none;
   width: 100%;
 }
-.form-input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(50,205,50,0.12); }
+.form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(50,205,50,0.12); }
 .form-input::placeholder { color: var(--text-dim); }
 
-select.form-input option { background: #07241a; color: var(--text); }
+select.form-input option { background: var(--input-option-bg); color: var(--text); }
 
 /* ── Tag / Badge ────────────────────────────────────────────────── */
 .badge {
@@ -170,10 +210,10 @@ select.form-input option { background: #07241a; color: var(--text); }
   padding: 12px 14px;
   font-size: 13px;
   color: var(--text);
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border);
 }
 .data-table tr:last-child td { border-bottom: none; }
-.data-table tr:hover td { background: var(--glass-hover); }
+.data-table tr:hover td { background: var(--table-hover); }
 
 /* ── Stat Card ────────────────────────────────────────────────────── */
 .stat-card {

@@ -10,6 +10,11 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const cron = require('node-cron');
 const { MongoClient } = require('mongodb');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'millecube-hub-secret-key-change-in-production';
+const JWT_EXPIRY = '7d';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,8 +43,9 @@ const FILE = {
   clients:   path.join(DATA_DIR, 'clients.json'),
   schedules: path.join(DATA_DIR, 'schedules.json'),
   jobs:      path.join(DATA_DIR, 'jobs.json'),
+  user:      path.join(DATA_DIR, 'user.json'),
 };
-Object.values(FILE).forEach(f => { if (!fs.existsSync(f)) fs.writeJsonSync(f, []); });
+Object.values(FILE).filter(f => f !== FILE.user).forEach(f => { if (!fs.existsSync(f)) fs.writeJsonSync(f, []); });
 const fileRead  = f => fs.readJsonSync(f);
 const fileWrite = (f, d) => fs.writeJsonSync(f, d, { spaces: 2 });
 
@@ -81,6 +87,95 @@ async function writeJobs(data) {
 app.use(cors());
 app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
+
+// ── Auth Helpers ───────────────────────────────────────────────────────────────
+async function getUser() {
+  if (USE_MONGO) {
+    const db = await getDb();
+    return db.collection('users').findOne({});
+  }
+  if (!fs.existsSync(FILE.user)) return null;
+  return fs.readJsonSync(FILE.user);
+}
+
+async function saveUser(user) {
+  const { _id, ...clean } = user;
+  if (USE_MONGO) {
+    const db = await getDb();
+    await db.collection('users').deleteMany({});
+    await db.collection('users').insertOne(clean);
+  } else {
+    fs.writeJsonSync(FILE.user, clean, { spaces: 2 });
+  }
+}
+
+async function ensureDefaultUser() {
+  const existing = await getUser();
+  if (!existing) {
+    const hashed = await bcrypt.hash('Admin@millecube', 10);
+    await saveUser({ id: uuidv4(), username: 'admin', email: 'hello@millecube.com', password: hashed, createdAt: new Date().toISOString() });
+    console.log('[AUTH] Default user created — username: admin  password: Admin@millecube');
+  }
+}
+
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    req.user = jwt.verify(header.slice(7), JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// ── Auth Routes (public) ───────────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    const user = await getUser();
+    if (!user || user.username !== username) return res.status(401).json({ error: 'Invalid credentials' });
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    res.json({ token, user: { username: user.username, email: user.email } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Protect all remaining /api routes ─────────────────────────────────────────
+app.use('/api', authMiddleware);
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = await getUser();
+    res.json({ username: user.username, email: user.email });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/auth/profile', async (req, res) => {
+  try {
+    const { username, email } = req.body;
+    if (!username) return res.status(400).json({ error: 'Username is required' });
+    const user = await getUser();
+    const updated = { ...user, username, email, updatedAt: new Date().toISOString() };
+    await saveUser(updated);
+    const token = jwt.sign({ id: user.id, username }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    res.json({ ok: true, token, user: { username, email } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/auth/password', async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!newPassword || newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    const user = await getUser();
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) return res.status(400).json({ error: 'Current password is incorrect' });
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await saveUser({ ...user, password: hashed, updatedAt: new Date().toISOString() });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 async function addJob(clientId, clientCode, period, status, filePath = null, error = null) {
   const job = {
@@ -581,5 +676,6 @@ app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISO
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n🟢 Millecube Ads Hub Backend running on http://localhost:${PORT}`);
+  try { await ensureDefaultUser(); } catch (e) { console.error('[AUTH] Failed to init user:', e.message); }
   try { await loadAllSchedules(); } catch (e) { console.error('[CRON] Failed to load schedules:', e.message); }
 });
