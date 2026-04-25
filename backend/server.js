@@ -15,51 +15,66 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
+const DATA_DIR    = path.join(__dirname, '../data');
 const REPORTS_DIR = path.join(__dirname, '../reports');
+fs.ensureDirSync(DATA_DIR);
 fs.ensureDirSync(REPORTS_DIR);
 
-// ── MongoDB ────────────────────────────────────────────────────────────────────
+// ── Storage: MongoDB if MONGODB_URI set, otherwise local JSON files ────────────
 let _db = null;
+const USE_MONGO = !!process.env.MONGODB_URI;
+
 async function getDb() {
   if (_db) return _db;
-  const uri = process.env.MONGODB_URI;
-  if (!uri) throw new Error('MONGODB_URI environment variable not set');
-  const client = new MongoClient(uri);
+  const client = new MongoClient(process.env.MONGODB_URI);
   await client.connect();
   _db = client.db('millecube');
-  console.log('[DB] Connected to MongoDB');
+  console.log('[DB] Connected to MongoDB Atlas');
   return _db;
 }
 
+// File-based fallback helpers
+const FILE = {
+  clients:   path.join(DATA_DIR, 'clients.json'),
+  schedules: path.join(DATA_DIR, 'schedules.json'),
+  jobs:      path.join(DATA_DIR, 'jobs.json'),
+};
+Object.values(FILE).forEach(f => { if (!fs.existsSync(f)) fs.writeJsonSync(f, []); });
+const fileRead  = f => fs.readJsonSync(f);
+const fileWrite = (f, d) => fs.writeJsonSync(f, d, { spaces: 2 });
+
 async function readClients() {
+  if (!USE_MONGO) return fileRead(FILE.clients);
   const db = await getDb();
   return db.collection('clients').find({}).toArray();
 }
 async function writeClients(data) {
+  if (!USE_MONGO) return fileWrite(FILE.clients, data);
   const db = await getDb();
-  const col = db.collection('clients');
-  await col.deleteMany({});
-  if (data.length > 0) await col.insertMany(data);
+  await db.collection('clients').deleteMany({});
+  if (data.length > 0) await db.collection('clients').insertMany(data);
 }
 async function readSchedules() {
+  if (!USE_MONGO) return fileRead(FILE.schedules);
   const db = await getDb();
   return db.collection('schedules').find({}).toArray();
 }
 async function writeSchedules(data) {
+  if (!USE_MONGO) return fileWrite(FILE.schedules, data);
   const db = await getDb();
-  const col = db.collection('schedules');
-  await col.deleteMany({});
-  if (data.length > 0) await col.insertMany(data);
+  await db.collection('schedules').deleteMany({});
+  if (data.length > 0) await db.collection('schedules').insertMany(data);
 }
 async function readJobs() {
+  if (!USE_MONGO) return fileRead(FILE.jobs);
   const db = await getDb();
   return db.collection('jobs').find({}).sort({ createdAt: -1 }).toArray();
 }
 async function writeJobs(data) {
+  if (!USE_MONGO) return fileWrite(FILE.jobs, data);
   const db = await getDb();
-  const col = db.collection('jobs');
-  await col.deleteMany({});
-  if (data.length > 0) await col.insertMany(data);
+  await db.collection('jobs').deleteMany({});
+  if (data.length > 0) await db.collection('jobs').insertMany(data);
 }
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
@@ -68,35 +83,43 @@ app.use(express.json());
 app.use('/reports', express.static(REPORTS_DIR));
 
 async function addJob(clientId, clientCode, period, status, filePath = null, error = null) {
-  const db = await getDb();
   const job = {
-    id: uuidv4(),
-    clientId,
-    clientCode,
-    period,
-    status,
-    filePath,
-    driveUrl: null,
-    error,
+    id: uuidv4(), clientId, clientCode, period, status,
+    filePath, driveUrl: null, error,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-  await db.collection('jobs').insertOne(job);
-  // Trim to last 200 jobs
-  const all = await db.collection('jobs').find({}).sort({ createdAt: 1 }).toArray();
-  if (all.length > 200) {
-    const toDelete = all.slice(0, all.length - 200).map(j => j.id);
-    await db.collection('jobs').deleteMany({ id: { $in: toDelete } });
+  if (USE_MONGO) {
+    const db = await getDb();
+    await db.collection('jobs').insertOne(job);
+    const all = await db.collection('jobs').find({}).sort({ createdAt: 1 }).toArray();
+    if (all.length > 200) {
+      const toDelete = all.slice(0, all.length - 200).map(j => j.id);
+      await db.collection('jobs').deleteMany({ id: { $in: toDelete } });
+    }
+  } else {
+    const jobs = fileRead(FILE.jobs);
+    jobs.unshift(job);
+    fileWrite(FILE.jobs, jobs.slice(0, 200));
   }
   return job;
 }
 
 async function updateJob(id, updates) {
-  const db = await getDb();
-  await db.collection('jobs').updateOne(
-    { id },
-    { $set: { ...updates, updatedAt: new Date().toISOString() } }
-  );
+  if (USE_MONGO) {
+    const db = await getDb();
+    await db.collection('jobs').updateOne(
+      { id },
+      { $set: { ...updates, updatedAt: new Date().toISOString() } }
+    );
+  } else {
+    const jobs = fileRead(FILE.jobs);
+    const idx = jobs.findIndex(j => j.id === id);
+    if (idx !== -1) {
+      jobs[idx] = { ...jobs[idx], ...updates, updatedAt: new Date().toISOString() };
+      fileWrite(FILE.jobs, jobs);
+    }
+  }
 }
 
 // ── Meta API Helper ────────────────────────────────────────────────────────────
