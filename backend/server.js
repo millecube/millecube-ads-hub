@@ -524,9 +524,8 @@ async function generateReportForClient(client, dateStart, dateStop, periodLabel)
 // ── Active cron jobs map ───────────────────────────────────────────────────────
 const activeCrons = new Map();
 
-function buildCronExpression(dayOfMonth) {
-  // Run at 08:00 AM on the specified day of month
-  return `0 8 ${dayOfMonth} * *`;
+function buildCronExpression(dayOfMonth, hour = 8, minute = 0) {
+  return `${minute} ${hour} ${dayOfMonth} * *`;
 }
 
 function getLastMonthRange() {
@@ -539,15 +538,13 @@ function getLastMonthRange() {
 }
 
 async function scheduleCron(schedule) {
-  const { id, clientId, dayOfMonth } = schedule;
+  const { id, clientId, dayOfMonth, hour = 8, minute = 0 } = schedule;
   const clients = await readClients();
   const client  = clients.find(c => c.id === clientId);
   if (!client) return;
 
-  const expr = buildCronExpression(dayOfMonth);
-  if (activeCrons.has(id)) {
-    activeCrons.get(id).stop();
-  }
+  const expr = buildCronExpression(dayOfMonth, hour, minute);
+  if (activeCrons.has(id)) activeCrons.get(id).stop();
 
   const task = cron.schedule(expr, async () => {
     const { dateStart, dateStop, label } = getLastMonthRange();
@@ -555,7 +552,7 @@ async function scheduleCron(schedule) {
   }, { timezone: 'Asia/Kuala_Lumpur' });
 
   activeCrons.set(id, task);
-  console.log(`[CRON] Scheduled ${client.clientCode} on day ${dayOfMonth} of each month`);
+  console.log(`[CRON] Scheduled ${client.clientCode} on day ${dayOfMonth} at ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')} MYT`);
 }
 
 async function loadAllSchedules() {
@@ -685,47 +682,49 @@ app.get('/api/schedules', async (req, res) => {
 // POST — create schedule
 app.post('/api/schedules', async (req, res) => {
   try {
-    const { clientId, dayOfMonth, active = true } = req.body;
+    const { clientId, dayOfMonth, hour = 8, minute = 0, active = true } = req.body;
     if (!clientId || !dayOfMonth) {
       return res.status(400).json({ error: 'clientId and dayOfMonth required' });
     }
-    const db = await getDb();
-    const existing = await db.collection('schedules').findOne({ clientId });
-    if (existing) return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
-    const client = await db.collection('clients').findOne({ id: clientId });
+    const clients = await readClients();
+    const client = clients.find(c => c.id === clientId);
     if (!client) return res.status(404).json({ error: 'Client not found' });
-    const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, dayOfMonth, active, createdAt: new Date().toISOString() };
-    await db.collection('schedules').insertOne(schedule);
+    const schedules = await readSchedules();
+    if (schedules.find(s => s.clientId === clientId)) {
+      return res.status(400).json({ error: 'Schedule already exists for this client. Update it instead.' });
+    }
+    const schedule = { id: uuidv4(), clientId, clientCode: client.clientCode, dayOfMonth, hour, minute, active, createdAt: new Date().toISOString() };
+    await writeSchedules([...schedules, schedule]);
     if (active) scheduleCron(schedule);
-    res.status(201).json({ ...schedule, _id: undefined });
+    res.status(201).json(schedule);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT — update schedule
 app.put('/api/schedules/:id', async (req, res) => {
   try {
-    const db = await getDb();
-    const existing = await db.collection('schedules').findOne({ id: req.params.id });
-    if (!existing) return res.status(404).json({ error: 'Schedule not found' });
-    const updated = { ...existing, ...req.body, id: existing.id, updatedAt: new Date().toISOString() };
-    delete updated._id;
-    await db.collection('schedules').replaceOne({ id: req.params.id }, updated);
+    const schedules = await readSchedules();
+    const idx = schedules.findIndex(s => s.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Schedule not found' });
+    const updated = { ...schedules[idx], ...req.body, id: schedules[idx].id, updatedAt: new Date().toISOString() };
+    schedules[idx] = updated;
+    await writeSchedules(schedules);
     if (activeCrons.has(updated.id)) activeCrons.get(updated.id).stop();
     if (updated.active) scheduleCron(updated);
-    res.json({ ...updated, _id: undefined });
+    res.json(updated);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE — remove schedule
 app.delete('/api/schedules/:id', async (req, res) => {
   try {
-    const db = await getDb();
-    const schedule = await db.collection('schedules').findOne({ id: req.params.id });
+    const schedules = await readSchedules();
+    const schedule = schedules.find(s => s.id === req.params.id);
     if (schedule && activeCrons.has(schedule.id)) {
       activeCrons.get(schedule.id).stop();
       activeCrons.delete(schedule.id);
     }
-    await db.collection('schedules').deleteOne({ id: req.params.id });
+    await writeSchedules(schedules.filter(s => s.id !== req.params.id));
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
