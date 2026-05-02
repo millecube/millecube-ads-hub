@@ -870,11 +870,39 @@ function getMonitorDateRange(range, dateStart, dateStop) {
   if (dateStart && dateStop) {
     return { dateStart, dateStop, rangeKey: `custom_${dateStart}_${dateStop}` };
   }
+  if (range === 'this_month') {
+    const myt   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+    const first = new Date(myt.getFullYear(), myt.getMonth(), 1);
+    return {
+      dateStart: first.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }),
+      dateStop:  todayMYT,
+      rangeKey:  'this_month'
+    };
+  }
   const days = range === '7d' ? 7 : range === '14d' ? 14 : 30;
   const start = new Date();
   start.setDate(start.getDate() - (days - 1));
   const dateStartStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
   return { dateStart: dateStartStr, dateStop: todayMYT, rangeKey: range || '30d' };
+}
+
+function calcDays(dateStart, dateStop) {
+  return Math.round((new Date(dateStop) - new Date(dateStart)) / 86400000) + 1;
+}
+
+function getPreviousPeriod(dateStart, dateStop) {
+  const days     = calcDays(dateStart, dateStop);
+  const prevEnd  = new Date(dateStart); prevEnd.setDate(prevEnd.getDate() - 1);
+  const prevStart= new Date(prevEnd);   prevStart.setDate(prevStart.getDate() - days + 1);
+  return {
+    dateStart: prevStart.toISOString().slice(0, 10),
+    dateStop:  prevEnd.toISOString().slice(0, 10)
+  };
+}
+
+function extractVideoAction(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return 0;
+  return parseFloat(arr[0]?.value || 0);
 }
 
 async function getMonitorCache(clientId, rangeKey) {
@@ -933,11 +961,46 @@ async function fetchCampaignLevel(client, dateStart, dateStop) {
       fields: [
         'campaign_name','campaign_id','objective','spend','reach','impressions',
         'clicks','ctr','cpm','cpc','frequency',
-        'actions','cost_per_action_type','date_start','date_stop'
+        'actions','cost_per_action_type','date_start','date_stop',
+        'video_p25_watched_actions','video_p50_watched_actions',
+        'video_p75_watched_actions','video_p100_watched_actions',
+        'video_avg_time_watched_actions'
       ].join(',')
     }
   });
   return res.data.data || [];
+}
+
+async function fetchActiveCampaignsCount(client) {
+  try {
+    const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/campaigns`, {
+      params: {
+        access_token: client.accessToken,
+        effective_status: JSON.stringify(['ACTIVE']),
+        fields: 'id',
+        limit: 500
+      }
+    });
+    return (res.data.data || []).length;
+  } catch { return 0; }
+}
+
+async function fetchAudienceBreakdowns(client, dateStart, dateStop) {
+  const base = {
+    access_token: client.accessToken,
+    time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+    level: 'account', limit: 500,
+    fields: 'impressions,clicks,spend,reach,ctr,cpm,cpc,actions'
+  };
+  const url = `https://graph.facebook.com/v19.0/${client.adAccountId}/insights`;
+  const [gender, age, region, platform, device] = await Promise.all([
+    axios.get(url, { params: { ...base, breakdowns: 'gender'             } }).then(r => r.data.data || []).catch(() => []),
+    axios.get(url, { params: { ...base, breakdowns: 'age'                } }).then(r => r.data.data || []).catch(() => []),
+    axios.get(url, { params: { ...base, breakdowns: 'region'             } }).then(r => r.data.data || []).catch(() => []),
+    axios.get(url, { params: { ...base, breakdowns: 'publisher_platform' } }).then(r => r.data.data || []).catch(() => []),
+    axios.get(url, { params: { ...base, breakdowns: 'impression_device'  } }).then(r => r.data.data || []).catch(() => []),
+  ]);
+  return { gender, age, region, platform, device };
 }
 
 async function fetchAdsetLevel(client, dateStart, dateStop) {
@@ -977,8 +1040,11 @@ async function fetchDailyTrend(client, dateStart, dateStop) {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
-      level: 'campaign', time_increment: 1, limit: 500,
-      fields: 'campaign_name,spend,impressions,clicks,actions,date_start'
+      level: 'account', time_increment: 1, limit: 500,
+      fields: [
+        'spend','reach','impressions','clicks','ctr','cpm','cpc','frequency',
+        'actions','date_start'
+      ].join(',')
     }
   });
   return res.data.data || [];
@@ -1030,6 +1096,75 @@ function processCampaignSummary(campaigns, client) {
   }
 
   return { totals: acc, branches, campaignCount: campaigns.length };
+}
+
+function processEnrichedSummary(campaigns, client, days) {
+  const acc = campaigns.reduce((a, c) => {
+    const imp = parseFloat(c.impressions || 0);
+    a.spend          += parseFloat(c.spend || 0);
+    a.reach          += parseFloat(c.reach || 0);
+    a.impressions    += imp;
+    a.clicks         += parseFloat(c.clicks || 0);
+    a.freqWeighted   += parseFloat(c.frequency || 0) * imp;
+    // Conversions
+    a.waConvos       += extractAction(c.actions, 'onsite_conversion.messaging_first_reply');
+    a.leads          += extractAction(c.actions, 'lead');
+    a.pageLikes      += extractAction(c.actions, 'like');
+    // Engagement
+    a.reactions      += extractAction(c.actions, 'post_reaction');
+    a.comments       += extractAction(c.actions, 'comment');
+    a.shares         += extractAction(c.actions, 'post');
+    a.saves          += extractAction(c.actions, 'onsite_conversion.post_save');
+    a.postEngagement += extractAction(c.actions, 'post_engagement');
+    a.igFollows      += extractAction(c.actions, 'instagram_follow');
+    a.pageEngagement += extractAction(c.actions, 'page_engagement');
+    // Video
+    const vv          = extractAction(c.actions, 'video_view');
+    const avgWatch    = extractVideoAction(c.video_avg_time_watched_actions);
+    a.videoViews     += vv;
+    a.videoP25       += extractVideoAction(c.video_p25_watched_actions);
+    a.videoP50       += extractVideoAction(c.video_p50_watched_actions);
+    a.videoP75       += extractVideoAction(c.video_p75_watched_actions);
+    a.videoP100      += extractVideoAction(c.video_p100_watched_actions);
+    a.videoWatchW    += avgWatch * vv;
+    return a;
+  }, {
+    spend:0, reach:0, impressions:0, clicks:0, freqWeighted:0,
+    waConvos:0, leads:0, pageLikes:0,
+    reactions:0, comments:0, shares:0, saves:0, postEngagement:0, igFollows:0, pageEngagement:0,
+    videoViews:0, videoP25:0, videoP50:0, videoP75:0, videoP100:0, videoWatchW:0
+  });
+
+  acc.ctr           = acc.impressions > 0 ? acc.clicks / acc.impressions * 100 : 0;
+  acc.cpm           = acc.impressions > 0 ? acc.spend  / acc.impressions * 1000 : 0;
+  acc.cpc           = acc.clicks      > 0 ? acc.spend  / acc.clicks : 0;
+  acc.frequency     = acc.impressions > 0 ? acc.freqWeighted / acc.impressions : 0;
+  acc.avgDailySpend = days > 0 ? acc.spend / days : 0;
+  acc.videoAvgWatch = acc.videoViews  > 0 ? acc.videoWatchW  / acc.videoViews  : 0;
+
+  const primaryGoal    = (client.campaignGoals || [])[0]?.goal || 'whatsapp';
+  const primaryResults = primaryGoal === 'leads'      ? acc.leads
+                       : primaryGoal === 'page_likes' ? acc.pageLikes
+                       : acc.waConvos;
+  acc.cpr            = primaryResults > 0 ? acc.spend / primaryResults : 0;
+  acc.primaryResults = primaryResults;
+  acc.primaryGoal    = primaryGoal;
+
+  let branches = null;
+  if (client.clientCode === 'VK') {
+    const bMap = {};
+    for (const c of campaigns) {
+      const b = detectVKBranch(c.campaign_name);
+      if (!bMap[b]) bMap[b] = { spend: 0, results: 0, impressions: 0, clicks: 0 };
+      bMap[b].spend       += parseFloat(c.spend || 0);
+      bMap[b].impressions += parseFloat(c.impressions || 0);
+      bMap[b].clicks      += parseFloat(c.clicks || 0);
+      bMap[b].results     += extractAction(c.actions, 'onsite_conversion.messaging_first_reply');
+    }
+    branches = bMap;
+  }
+
+  return { totals: acc, branches };
 }
 
 // ── GET /api/monitor/overview ─────────────────────────────────────────────────
@@ -1089,7 +1224,10 @@ app.get('/api/monitor/:clientId', async (req, res) => {
   try {
     const { range, dateStart: ds, dateStop: de } = req.query;
     const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
-    const detailKey = `detail_${rangeKey}`;
+    const detailKey = `detail2_${rangeKey}`;
+    const days      = calcDays(dateStart, dateStop);
+    const prev      = getPreviousPeriod(dateStart, dateStop);
+    const prevKey   = `detail2_prev_${rangeKey}`;
 
     const allClients = await readClients();
     const client     = allClients.find(c => c.id === req.params.clientId);
@@ -1100,19 +1238,30 @@ app.get('/api/monitor/:clientId', async (req, res) => {
         return res.status(403).json({ error: 'Access denied' });
     }
 
+    // Current period detail
     let detail = await getMonitorCache(client.id, detailKey);
     if (!detail) {
-      const [campaigns, adsets, ads, daily] = await Promise.all([
+      const [campaigns, adsets, ads, daily, activeCampaignCount] = await Promise.all([
         fetchCampaignLevel(client, dateStart, dateStop),
         fetchAdsetLevel(client, dateStart, dateStop),
         fetchAdLevel(client, dateStart, dateStop),
-        fetchDailyTrend(client, dateStart, dateStop)
+        fetchDailyTrend(client, dateStart, dateStop),
+        fetchActiveCampaignsCount(client)
       ]);
-      detail = { campaigns, adsets, ads, daily, fetchedAt: new Date().toISOString() };
+      detail = { campaigns, adsets, ads, daily, activeCampaignCount, fetchedAt: new Date().toISOString() };
       await setMonitorCache(client.id, detailKey, detail);
     }
 
-    const { totals, branches, campaignCount } = processCampaignSummary(detail.campaigns, client);
+    // Previous period (campaigns only — for comparison cards)
+    let prevDetail = await getMonitorCache(client.id, prevKey);
+    if (!prevDetail) {
+      const campaigns = await fetchCampaignLevel(client, prev.dateStart, prev.dateStop);
+      prevDetail = { campaigns, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, prevKey, prevDetail);
+    }
+
+    const { totals, branches } = processEnrichedSummary(detail.campaigns, client, days);
+    const { totals: prevTotals } = processEnrichedSummary(prevDetail.campaigns, client, days);
     const health = calcHealthScore(
       { ctr: totals.ctr, cpm: totals.cpm, cpr: totals.cpr, frequency: totals.frequency },
       client.thresholds || null
@@ -1123,11 +1272,43 @@ app.get('/api/monitor/:clientId', async (req, res) => {
         id: client.id, clientCode: client.clientCode, name: client.name,
         monthlyBudget: client.monthlyBudget || null, thresholds: client.thresholds || null
       },
-      totals, branches, campaignCount, health,
-      campaigns: detail.campaigns, adsets: detail.adsets,
-      ads: detail.ads, daily: detail.daily,
-      dateStart, dateStop, rangeKey, cachedAt: detail.fetchedAt
+      totals, prevTotals, branches, health,
+      activeCampaignCount: detail.activeCampaignCount || 0,
+      campaigns: detail.campaigns,
+      adsets: detail.adsets,
+      ads: detail.ads,
+      daily: detail.daily,
+      dateStart, dateStop,
+      prevDateStart: prev.dateStart, prevDateStop: prev.dateStop,
+      rangeKey, cachedAt: detail.fetchedAt
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/monitor/:clientId/audience ───────────────────────────────────────
+app.get('/api/monitor/:clientId/audience', async (req, res) => {
+  try {
+    const { range, dateStart: ds, dateStop: de } = req.query;
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const audienceKey = `audience_${rangeKey}`;
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === req.params.clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    if (req.user.role !== 'admin') {
+      if (!Array.isArray(client.assignedUsers) || !client.assignedUsers.includes(req.user.id))
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    let audience = await getMonitorCache(client.id, audienceKey);
+    if (!audience) {
+      audience = await fetchAudienceBreakdowns(client, dateStart, dateStop);
+      audience.fetchedAt = new Date().toISOString();
+      await setMonitorCache(client.id, audienceKey, audience);
+    }
+
+    res.json({ ...audience, dateStart, dateStop, rangeKey, cachedAt: audience.fetchedAt });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1145,7 +1326,9 @@ app.post('/api/monitor/:clientId/diagnose', async (req, res) => {
     const client     = allClients.find(c => c.id === req.params.clientId);
     if (!client) return res.status(404).json({ error: 'Client not found' });
 
-    let detail = await getMonitorCache(client.id, detailKey);
+    const detailKey2 = `detail2_${rangeKey}`;
+    const days = calcDays(dateStart, dateStop);
+    let detail = await getMonitorCache(client.id, detailKey2);
     if (!detail) {
       const [campaigns, adsets, ads, daily] = await Promise.all([
         fetchCampaignLevel(client, dateStart, dateStop),
@@ -1154,10 +1337,10 @@ app.post('/api/monitor/:clientId/diagnose', async (req, res) => {
         fetchDailyTrend(client, dateStart, dateStop)
       ]);
       detail = { campaigns, adsets, ads, daily, fetchedAt: new Date().toISOString() };
-      await setMonitorCache(client.id, detailKey, detail);
+      await setMonitorCache(client.id, detailKey2, detail);
     }
 
-    const { totals }   = processCampaignSummary(detail.campaigns, client);
+    const { totals }   = processEnrichedSummary(detail.campaigns, client, days);
     const health       = calcHealthScore(
       { ctr: totals.ctr, cpm: totals.cpm, cpr: totals.cpr, frequency: totals.frequency },
       client.thresholds || null
@@ -1174,19 +1357,19 @@ app.post('/api/monitor/:clientId/diagnose', async (req, res) => {
     const prompt = `You are a Meta Ads performance analyst for Millecube Digital, a Malaysian digital marketing agency.
 
 Client: ${client.name} (${client.clientCode})
-Period: ${dateStart} to ${dateStop}
-Thresholds: ${usingDefaults ? 'Malaysian benchmarks (defaults — no custom thresholds set)' : 'Custom thresholds configured by admin'}
+Period: ${dateStart} to ${dateStop} (${days} days)
+Thresholds: ${usingDefaults ? 'Malaysian benchmarks (defaults)' : 'Custom thresholds set by admin'}
 
-ACCOUNT METRICS:
-- Total Spend: RM ${totals.spend.toFixed(2)}
-- Reach: ${Math.round(totals.reach).toLocaleString()}
-- Impressions: ${Math.round(totals.impressions).toLocaleString()}
-- CTR: ${totals.ctr.toFixed(2)}% (threshold floor: ${t.ctr}%)
-- CPM: RM ${totals.cpm.toFixed(2)} (threshold cap: RM ${t.cpm})
-- CPC: RM ${totals.cpc.toFixed(2)}
-- CPR (${totals.primaryGoal}): RM ${totals.cpr.toFixed(2)} (threshold cap: RM ${t.cpr})
-- Frequency: ${totals.frequency.toFixed(2)} (threshold cap: ${t.frequency})
-- Primary Results: ${Math.round(totals.primaryResults).toLocaleString()} ${totals.primaryGoal}
+PERFORMANCE METRICS:
+- Total Spend: RM ${totals.spend.toFixed(2)} | Avg Daily: RM ${totals.avgDailySpend.toFixed(2)}
+- Reach: ${Math.round(totals.reach).toLocaleString()} | Impressions: ${Math.round(totals.impressions).toLocaleString()}
+- CTR: ${totals.ctr.toFixed(2)}% (floor: ${t.ctr}%) | CPM: RM ${totals.cpm.toFixed(2)} (cap: RM ${t.cpm})
+- CPC: RM ${totals.cpc.toFixed(2)} | Frequency: ${totals.frequency.toFixed(2)} (cap: ${t.frequency})
+- Conversations (WA): ${Math.round(totals.waConvos).toLocaleString()} | CPR: RM ${totals.cpr.toFixed(2)} (cap: RM ${t.cpr})
+
+ENGAGEMENT:
+- Post Engagement: ${Math.round(totals.postEngagement).toLocaleString()} (Reactions: ${Math.round(totals.reactions)}, Comments: ${Math.round(totals.comments)}, Shares: ${Math.round(totals.shares)}, Saves: ${Math.round(totals.saves)})
+- Video Views: ${Math.round(totals.videoViews).toLocaleString()} | Avg Watch Time: ${totals.videoAvgWatch.toFixed(1)}s
 
 HEALTH SCORE: ${health.score.toUpperCase()}
 Breached: ${health.breaches.length === 0 ? 'None' : health.breaches.map(b => `${b.metric} (${b.value.toFixed(2)} vs ${b.threshold} — ${b.direction} threshold)`).join(', ')}
@@ -1195,13 +1378,12 @@ TOP 5 CAMPAIGNS BY SPEND:
 ${topCampaigns}
 ${context ? `\nACCOUNT MANAGER NOTES:\n${context}` : ''}
 
-Write a concise plain-English diagnosis (3–5 paragraphs) covering:
-1. Overall account health and what is driving the score
-2. Top 1–2 specific issues with data-backed reasoning
-3. Top 2–3 actionable recommendations (specific, not generic)
-4. One thing working well that should be maintained
-
-Use RM for currency. Write for a non-technical account manager. Be direct and specific.`;
+Return your analysis as a JSON array of finding objects (no markdown, raw JSON only):
+[
+  { "title": "short title (5 words max)", "body": "2-3 sentence finding with specific numbers", "type": "warning|positive|info" },
+  ...
+]
+Include 4-6 findings covering: overall health, top issues (data-backed), actionable recommendations, and one positive. Use RM for currency. Write for a non-technical account manager.`;
 
     const Anthropic = require('@anthropic-ai/sdk');
     const anthropic = new Anthropic({ apiKey });
@@ -1211,11 +1393,15 @@ Use RM for currency. Write for a non-technical account manager. Be direct and sp
       messages: [{ role: 'user', content: prompt }]
     });
 
-    res.json({
-      diagnosis: message.content[0].text,
-      health, dateStart, dateStop,
-      generatedAt: new Date().toISOString()
-    });
+    let findings = [];
+    try {
+      const raw = message.content[0].text.trim();
+      const jsonStr = raw.startsWith('[') ? raw : raw.slice(raw.indexOf('['), raw.lastIndexOf(']') + 1);
+      findings = JSON.parse(jsonStr);
+    } catch {
+      findings = [{ title: 'AI Analysis', body: message.content[0].text, type: 'info' }];
+    }
+    res.json({ findings, health, dateStart, dateStop, generatedAt: new Date().toISOString() });
   } catch (err) {
     console.error('[DIAGNOSE]', err.message);
     res.status(500).json({ error: err.message });

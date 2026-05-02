@@ -1,119 +1,420 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { Treemap, ResponsiveContainer, Tooltip } from 'recharts';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import {
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
 import { monitorAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../context/AuthContext';
 
-const fmtRM  = v => `RM ${parseFloat(v || 0).toFixed(2)}`;
+// ── Formatters ────────────────────────────────────────────────────────────────
+const fmtRM  = v => `RM ${parseFloat(v || 0).toLocaleString('en-MY', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtRMS = v => `RM ${parseFloat(v || 0).toLocaleString('en-MY', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 const fmtNum = v => Math.round(parseFloat(v || 0)).toLocaleString('en-MY');
 const fmtPct = v => `${parseFloat(v || 0).toFixed(2)}%`;
+const fmtSec = v => `${parseFloat(v || 0).toFixed(1)}s`;
 
-const HEALTH_COLOR = { green: '#32cd32', yellow: '#f5a623', red: '#ff4d4d' };
-const HEALTH_BG    = { green: 'rgba(50,205,50,0.12)', yellow: 'rgba(245,166,35,0.12)', red: 'rgba(255,77,77,0.12)' };
-const HEALTH_LABEL = { green: '● Healthy', yellow: '● At Risk', red: '● Critical' };
+function extractFromActions(actions, type) {
+  if (!Array.isArray(actions)) return 0;
+  const f = actions.find(a => a.action_type === type);
+  return f ? parseFloat(f.value || 0) : 0;
+}
 
-const RANGE_OPTIONS = [
-  { value: '30d', label: 'Last 30 days' },
-  { value: '14d', label: 'Last 14 days' },
-  { value: '7d',  label: 'Last 7 days'  },
-  { value: 'custom', label: 'Custom range' },
+function detectBranch(name) {
+  const n = (name || '').toUpperCase();
+  if (n.includes('KL')) return 'KL';
+  if (n.includes('RC')) return 'RC';
+  if (n.includes('CR')) return 'CR';
+  return 'OTHER';
+}
+
+function calcChange(curr, prev, higherBetter) {
+  if (!prev || prev === 0) return null;
+  const pct = ((curr - prev) / Math.abs(prev)) * 100;
+  const dir  = curr > prev ? 'up' : curr < prev ? 'down' : 'flat';
+  const isGood = higherBetter === null ? null : higherBetter ? dir === 'up' : dir === 'down';
+  return { pct: Math.abs(pct), dir, isGood };
+}
+
+// ── Metric definitions ────────────────────────────────────────────────────────
+const METRICS = [
+  { key: 'spend',          label: 'Total Spend',       fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: null },
+  { key: 'avgDailySpend',  label: 'Avg Daily Spend',   fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: null },
+  { key: 'waConvos',       label: 'Conversations',     fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
+  { key: 'reach',          label: 'Reach',             fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
+  { key: 'impressions',    label: 'Impressions',       fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
+  { key: 'cpm',            label: 'CPM',               fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
+  { key: 'clicks',         label: 'Clicks',            fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
+  { key: 'ctr',            label: 'CTR',               fmt: fmtPct, chartFmt: v => `${parseFloat(v||0).toFixed(2)}%`,  higherBetter: true  },
+  { key: 'cpc',            label: 'CPC',               fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
+  { key: 'active',         label: 'Active Campaigns',  fmt: v => String(Math.round(v || 0)), chartFmt: null,            noCompare: true     },
 ];
 
-const STATUS_COLORS = { open: '#f5a623', in_progress: '#1A7FCC', done: '#32cd32', escalated: '#ff4d4d' };
-const SEVERITY_COLORS = { minor: '#f5a623', major: '#ff4d4d' };
+const CHART_COLORS = ['#32cd32', '#f5a623', '#1A7FCC', '#ff4d4d', '#a78bfa'];
+const AUDIENCE_COLORS = ['#32cd32', '#1A7FCC', '#f5a623', '#ff4d4d', '#a78bfa', '#06b6d4', '#f97316'];
 
-// ── Health Badge ──────────────────────────────────────────────────────────────
-function HealthBadge({ score, size = 'md' }) {
-  const isLg = size === 'lg';
+const RANGES = [
+  { value: '7d',        label: 'Last 7 days'  },
+  { value: '14d',       label: 'Last 14 days' },
+  { value: '30d',       label: 'Last 30 days' },
+  { value: 'this_month',label: 'This month'   },
+  { value: 'custom',    label: 'Custom'       },
+];
+
+// ── Change Badge ──────────────────────────────────────────────────────────────
+function ChangeBadge({ curr, prev, higherBetter }) {
+  const chg = calcChange(curr, prev, higherBetter);
+  if (!chg) return null;
+  const arrow  = chg.dir === 'up' ? '↑' : chg.dir === 'down' ? '↓' : '→';
+  const color  = chg.isGood === null ? 'rgba(232,245,233,0.4)' : chg.isGood ? '#32cd32' : '#ff4d4d';
+  const bg     = chg.isGood === null ? 'rgba(255,255,255,0.06)' : chg.isGood ? 'rgba(50,205,50,0.12)' : 'rgba(255,77,77,0.12)';
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 5,
-      background: HEALTH_BG[score] || HEALTH_BG.red,
-      color: HEALTH_COLOR[score] || '#ff4d4d',
-      border: `1px solid ${HEALTH_COLOR[score] || '#ff4d4d'}44`,
-      borderRadius: 20, padding: isLg ? '5px 14px' : '3px 10px',
-      fontSize: isLg ? 13 : 11, fontWeight: 700
-    }}>
-      {HEALTH_LABEL[score] || '● Unknown'}
+    <span style={{ fontSize: 10, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '2px 6px', whiteSpace: 'nowrap' }}>
+      {arrow} {chg.pct.toFixed(1)}%
     </span>
   );
 }
 
-// ── Metric Row ────────────────────────────────────────────────────────────────
-function MetricRow({ label, value, threshold, direction, breached, usingDefaults }) {
+// ── Metric Card ───────────────────────────────────────────────────────────────
+function MetricCard({ metric, value, prevValue, activeCampaignCount, active, onClick }) {
+  const displayValue = metric.key === 'active' ? fmtNum(activeCampaignCount) : metric.fmt(value);
+  const isActive = active;
+
   return (
-    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-      <td style={td.label}>{label}</td>
-      <td style={{ ...td.value, color: breached ? '#ff4d4d' : '#32cd32', fontWeight: 700 }}>{value}</td>
-      <td style={td.thresh}>
-        {threshold !== null ? (
-          <span style={{ fontSize: 11, color: 'rgba(232,245,233,0.4)' }}>
-            {direction === 'below' ? '≥' : '≤'} {threshold}
-            {usingDefaults && <span style={{ color: 'rgba(232,245,233,0.25)', marginLeft: 4 }}>(default)</span>}
-          </span>
-        ) : '—'}
-      </td>
-      <td style={td.status}>
-        {breached
-          ? <span style={{ color: '#ff4d4d', fontSize: 11 }}>⚠ Breached</span>
-          : <span style={{ color: '#32cd32', fontSize: 11 }}>✓ OK</span>
-        }
-      </td>
-    </tr>
+    <div
+      onClick={onClick}
+      style={{
+        ...mc.card,
+        border: isActive ? '1.5px solid #32cd32' : '1px solid rgba(50,205,50,0.12)',
+        background: isActive ? 'rgba(50,205,50,0.08)' : 'rgba(7,80,60,0.15)',
+        cursor: 'pointer',
+        boxShadow: isActive ? '0 0 0 3px rgba(50,205,50,0.12)' : undefined,
+      }}
+    >
+      <div style={mc.label}>{metric.label}</div>
+      <div style={mc.value}>{displayValue}</div>
+      {!metric.noCompare && (
+        <div style={mc.compare}>
+          <ChangeBadge curr={parseFloat(value||0)} prev={parseFloat(prevValue||0)} higherBetter={metric.higherBetter} />
+          {prevValue > 0 && <span style={mc.prevLabel}>vs prev</span>}
+        </div>
+      )}
+      {metric.noCompare && (
+        <div style={mc.compare}>
+          <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>live status</span>
+        </div>
+      )}
+      {isActive && <div style={mc.activeBar} />}
+    </div>
   );
 }
 
-const td = {
-  label:  { padding: '10px 12px', fontSize: 13, color: 'rgba(232,245,233,0.7)' },
-  value:  { padding: '10px 12px', fontSize: 14 },
-  thresh: { padding: '10px 12px' },
-  status: { padding: '10px 12px' },
+const mc = {
+  card:      { padding: '14px 16px', borderRadius: 10, position: 'relative', transition: 'all 0.2s', overflow: 'hidden' },
+  label:     { fontSize: 10, fontWeight: 600, color: 'rgba(232,245,233,0.45)', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
+  value:     { fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.1, marginBottom: 8 },
+  compare:   { display: 'flex', alignItems: 'center', gap: 6, minHeight: 18 },
+  prevLabel: { fontSize: 10, color: 'rgba(232,245,233,0.25)' },
+  activeBar: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, background: '#32cd32', borderRadius: '0 0 10px 10px' },
 };
 
-// ── Treemap custom content ────────────────────────────────────────────────────
-function TreemapContent({ x, y, width, height, name, value, depth }) {
-  if (width < 30 || height < 20) return null;
+// ── Multi-metric Line Chart ───────────────────────────────────────────────────
+function MetricLineChart({ daily, activeMetricKeys }) {
+  if (!daily || daily.length === 0 || activeMetricKeys.length === 0) {
+    return (
+      <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 13 }}>
+        {activeMetricKeys.length === 0 ? 'Click metric cards above to plot on chart (max 3)' : 'No daily data available'}
+      </div>
+    );
+  }
+
+  // Build chart data with normalization (0-100 index per metric)
+  const metricMaxes = {};
+  activeMetricKeys.forEach(k => {
+    metricMaxes[k] = Math.max(...daily.map(d => parseFloat(d[k] || 0)), 1);
+  });
+
+  const chartData = daily.map(d => {
+    const row = { date: d.date_start?.slice(5) || d.date || '' };
+    activeMetricKeys.forEach(k => {
+      row[k]        = parseFloat(d[k] || 0);
+      row[`${k}_n`] = (parseFloat(d[k] || 0) / metricMaxes[k]) * 100;
+    });
+    return row;
+  });
+
+  const metaDefs = METRICS.filter(m => activeMetricKeys.includes(m.key));
+
   return (
-    <g>
-      <rect x={x} y={y} width={width} height={height}
-        style={{ fill: depth === 1 ? '#07503c' : depth === 2 ? '#0a6b4e' : '#0e8060',
-          stroke: '#03140e', strokeWidth: 2, opacity: 0.9 }} />
-      {width > 60 && height > 28 && (
-        <>
-          <text x={x + 8} y={y + 16} fill="#32cd32" fontSize={10} fontWeight={700}>{name?.length > 18 ? name.slice(0, 16) + '…' : name}</text>
-          {height > 42 && <text x={x + 8} y={y + 30} fill="rgba(232,245,233,0.6)" fontSize={9}>{fmtRM(value)}</text>}
-        </>
-      )}
-    </g>
+    <ResponsiveContainer width="100%" height={220}>
+      <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: -20 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.08)" />
+        <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.35)' }} tickLine={false} />
+        <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.35)' }} tickLine={false} tickFormatter={v => `${Math.round(v)}`} />
+        <Tooltip
+          contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }}
+          labelStyle={{ color: 'rgba(232,245,233,0.6)', marginBottom: 4 }}
+          formatter={(val, name) => {
+            const m = metaDefs.find(x => `${x.key}_n` === name);
+            const actual = m ? chartData.find(d => d[`${m.key}_n`] === val)?.[m.key] : val;
+            return [m ? m.chartFmt(actual) : val, m?.label || name];
+          }}
+        />
+        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={name => {
+          const m = metaDefs.find(x => `${x.key}_n` === name);
+          return <span style={{ color: 'rgba(232,245,233,0.7)' }}>{m?.label || name}</span>;
+        }} />
+        {metaDefs.map((m, i) => (
+          <Line key={m.key} type="monotone" dataKey={`${m.key}_n`} stroke={CHART_COLORS[i]} strokeWidth={2}
+            dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+        ))}
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 
-// ── Action Board ──────────────────────────────────────────────────────────────
-function ActionBoard({ clientId, clientCode }) {
+// ── AI Findings Row ───────────────────────────────────────────────────────────
+const FINDING_COLORS = {
+  warning:  { bg: 'rgba(245,166,35,0.08)', border: 'rgba(245,166,35,0.25)', title: '#f5a623', icon: '⚠' },
+  positive: { bg: 'rgba(50,205,50,0.08)',  border: 'rgba(50,205,50,0.25)',  title: '#32cd32', icon: '✓' },
+  info:     { bg: 'rgba(26,127,204,0.08)', border: 'rgba(26,127,204,0.25)', title: '#1A7FCC', icon: '◎' },
+};
+
+function AIFindingsRow({ findings, loading }) {
+  if (loading) return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 0', color: 'rgba(232,245,233,0.4)', fontSize: 13 }}>
+      <div className="spinner" style={{ width: 14, height: 14 }} /> Generating AI analysis…
+    </div>
+  );
+  if (!findings || findings.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '4px 0 16px', marginBottom: 4 }}>
+      {findings.map((f, i) => {
+        const style = FINDING_COLORS[f.type] || FINDING_COLORS.info;
+        return (
+          <div key={i} style={{
+            flexShrink: 0, width: 240,
+            background: style.bg, border: `1px solid ${style.border}`,
+            borderRadius: 10, padding: '14px 16px'
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: style.title, marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span>{style.icon}</span>
+              <span style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{f.title}</span>
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(232,245,233,0.7)', lineHeight: 1.6 }}>{f.body}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Engagement Donut ──────────────────────────────────────────────────────────
+function EngagementDonut({ reactions, comments, shares, saves }) {
+  const total = reactions + comments + shares + saves;
+  const data = [
+    { name: 'Reactions', value: reactions },
+    { name: 'Comments',  value: comments  },
+    { name: 'Shares',    value: shares    },
+    { name: 'Saves',     value: saves     },
+  ].filter(d => d.value > 0);
+
+  if (total === 0) return (
+    <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 12 }}>
+      No engagement data
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <ResponsiveContainer width="100%" height={180}>
+        <PieChart>
+          <Pie data={data} cx="50%" cy="50%" innerRadius={52} outerRadius={78} dataKey="value" paddingAngle={2}>
+            {data.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i]} />)}
+          </Pie>
+          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }}
+            formatter={(v, n) => [fmtNum(v), n]} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>{fmtNum(total)}</div>
+        <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Total</div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8 }}>
+        {data.map((d, i) => (
+          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: AUDIENCE_COLORS[i] }} />
+            <span style={{ color: 'rgba(232,245,233,0.5)' }}>{d.name}</span>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{fmtNum(d.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Conversion Funnel ─────────────────────────────────────────────────────────
+function ConversionFunnel({ reach, clicks, messages, funnelType, videoP25, videoP50, videoP75, videoP100, videoAvgWatch }) {
+  if (funnelType === 'video') {
+    const steps = [
+      { label: '25% Plays', value: videoP25  },
+      { label: '50% Plays', value: videoP50  },
+      { label: '75% Plays', value: videoP75  },
+      { label: '100% Plays', value: videoP100 },
+    ];
+    const max = Math.max(videoP25, 1);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+        {steps.map((s, i) => {
+          const prev  = i > 0 ? steps[i - 1].value : null;
+          const rate  = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(1) : null;
+          const width = Math.max((s.value / max) * 100, 12);
+          return (
+            <React.Fragment key={s.label}>
+              {rate && <div style={fn.rate}>↓ {rate}% retention</div>}
+              <div style={{ ...fn.step, width: `${width}%`, background: CHART_COLORS[i] }}>
+                <div style={fn.stepLabel}>{s.label}</div>
+                <div style={fn.stepVal}>{fmtNum(s.value)}</div>
+              </div>
+            </React.Fragment>
+          );
+        })}
+        {videoAvgWatch > 0 && (
+          <div style={fn.watchTime}>Avg watch time: {fmtSec(videoAvgWatch)}</div>
+        )}
+      </div>
+    );
+  }
+
+  const steps = [
+    { label: 'Reach',    value: reach    },
+    { label: 'Clicks',   value: clicks   },
+    { label: 'Messages', value: messages },
+  ];
+  const max = Math.max(reach, 1);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+      {steps.map((s, i) => {
+        const prev  = i > 0 ? steps[i - 1].value : null;
+        const rate  = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(2) : null;
+        const width = Math.max((s.value / max) * 100, 12);
+        return (
+          <React.Fragment key={s.label}>
+            {rate && <div style={fn.rate}>↓ {rate}% conversion</div>}
+            <div style={{ ...fn.step, width: `${width}%`, background: ['#07503c', '#0a6b4e', '#32cd32'][i] }}>
+              <div style={fn.stepLabel}>{s.label}</div>
+              <div style={fn.stepVal}>{fmtNum(s.value)}</div>
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+const fn = {
+  step:      { minWidth: 100, padding: '10px 20px', borderRadius: 6, textAlign: 'center', transition: 'width 0.5s ease' },
+  stepLabel: { fontSize: 10, color: 'rgba(232,245,233,0.6)', textTransform: 'uppercase', letterSpacing: 0.6 },
+  stepVal:   { fontSize: 18, fontWeight: 800, color: '#fff', marginTop: 2 },
+  rate:      { fontSize: 10, color: 'rgba(232,245,233,0.35)', letterSpacing: 0.3 },
+  watchTime: { marginTop: 8, fontSize: 12, color: '#32cd32', fontWeight: 700 },
+};
+
+// ── Audience Bar Chart ────────────────────────────────────────────────────────
+function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
+  if (!data || data.length === 0) return (
+    <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 11 }}>No data</div>
+  );
+  const sorted    = [...data].sort((a, b) => parseFloat(b[valueKey] || 0) - parseFloat(a[valueKey] || 0)).slice(0, 10);
+  const formatted = sorted.map(d => ({ name: d[labelKey] || '—', val: parseFloat(d[valueKey] || 0) }));
+
+  if (horizontal) {
+    return (
+      <ResponsiveContainer width="100%" height={Math.max(160, formatted.length * 28)}>
+        <BarChart data={formatted} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 60 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" horizontal={false} />
+          <XAxis type="number" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
+          <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.5)' }} tickLine={false} width={58} />
+          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+          <Bar dataKey="val" fill={color || '#32cd32'} radius={[0, 3, 3, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    );
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={180}>
+      <BarChart data={formatted} margin={{ top: 0, right: 8, bottom: 20, left: -20 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" vertical={false} />
+        <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.4)' }} tickLine={false} angle={-30} textAnchor="end" />
+        <YAxis tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
+        <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+        <Bar dataKey="val" radius={[3, 3, 0, 0]}>
+          {formatted.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function AudienceDonut({ data, labelKey, valueKey }) {
+  const sorted  = [...(data || [])].sort((a, b) => parseFloat(b[valueKey]||0) - parseFloat(a[valueKey]||0));
+  const entries = sorted.map(d => ({ name: d[labelKey] || '—', value: parseFloat(d[valueKey] || 0) })).filter(d => d.value > 0);
+  if (entries.length === 0) return <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 11 }}>No data</div>;
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={160}>
+        <PieChart>
+          <Pie data={entries} cx="50%" cy="50%" innerRadius={42} outerRadius={65} dataKey="value" paddingAngle={2}>
+            {entries.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
+          </Pie>
+          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+        </PieChart>
+      </ResponsiveContainer>
+      <div style={{ display: 'flex', gap: '4px 14px', flexWrap: 'wrap', marginTop: 6 }}>
+        {entries.map((d, i) => (
+          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: AUDIENCE_COLORS[i % AUDIENCE_COLORS.length] }} />
+            <span style={{ color: 'rgba(232,245,233,0.5)' }}>{d.name}</span>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{fmtNum(d.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Action Widget ─────────────────────────────────────────────────────────────
+function ActionWidget({ clientId, clientCode }) {
   const toast = useToast();
   const { user } = useAuth();
-  const [actions, setActions]       = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [showForm, setShowForm]     = useState(false);
-  const [form, setForm]             = useState({ campaignName: '', metric: '', issue: '', recommendation: '', severity: 'minor' });
-  const [saving, setSaving]         = useState(false);
+  const [open,   setOpen]   = useState(false);
+  const [actions,setActions]= useState([]);
+  const [form,   setForm]   = useState({ issue: '', metric: '', recommendation: '', severity: 'minor' });
+  const [saving, setSaving] = useState(false);
+  const panelRef = useRef(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try { setActions(await monitorAPI.actions(clientId)); }
-    catch { toast('Failed to load actions.', 'error'); }
-    finally { setLoading(false); }
+    if (!clientId) return;
+    try { setActions(await monitorAPI.actions(clientId)); } catch {}
   }, [clientId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!open) return;
+    const h = e => { if (panelRef.current && !panelRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
 
   const handleAdd = async (e) => {
     e.preventDefault();
+    if (!form.issue.trim()) return;
     setSaving(true);
     try {
       await monitorAPI.addAction(clientId, { ...form, clientCode });
-      setForm({ campaignName: '', metric: '', issue: '', recommendation: '', severity: 'minor' });
-      setShowForm(false);
+      setForm({ issue: '', metric: '', recommendation: '', severity: 'minor' });
       await load();
       toast('Action added.', 'success');
     } catch { toast('Failed to add action.', 'error'); }
@@ -121,666 +422,579 @@ function ActionBoard({ clientId, clientCode }) {
   };
 
   const handleStatus = async (actionId, status) => {
-    try {
-      await monitorAPI.updateAction(actionId, { status });
-      await load();
-    } catch { toast('Failed to update.', 'error'); }
+    try { await monitorAPI.updateAction(actionId, { status }); await load(); } catch {}
   };
 
   const openCount = actions.filter(a => a.status === 'open' || a.status === 'in_progress').length;
 
   return (
-    <div style={ab.wrap}>
-      <div style={ab.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={ab.title}>Action Board</span>
-          {openCount > 0 && (
-            <span style={ab.badge}>{openCount} open</span>
-          )}
-        </div>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowForm(v => !v)}>
-          {showForm ? 'Cancel' : '+ Add Action'}
-        </button>
-      </div>
+    <>
+      {/* Floating button */}
+      <button onClick={() => setOpen(v => !v)} style={aw.fab} title="Action Board">
+        ◉
+        {openCount > 0 && <span style={aw.fabBadge}>{openCount}</span>}
+      </button>
 
-      {showForm && (
-        <form onSubmit={handleAdd} style={ab.form}>
-          <div style={ab.formGrid}>
-            <div>
-              <label style={ab.label}>Campaign (optional)</label>
-              <input className="form-input" value={form.campaignName} onChange={e => setForm(p => ({ ...p, campaignName: e.target.value }))} placeholder="Campaign name" />
+      {/* Slide-out panel */}
+      {open && (
+        <div ref={panelRef} style={aw.panel}>
+          <div style={aw.panelHead}>
+            <span style={aw.panelTitle}>Action Board</span>
+            {clientCode && <span style={aw.panelClient}>{clientCode}</span>}
+            <button onClick={() => setOpen(false)} style={aw.closeBtn}>✕</button>
+          </div>
+
+          <form onSubmit={handleAdd} style={aw.form}>
+            <input className="form-input" placeholder="Issue *" value={form.issue} onChange={e => setForm(p => ({ ...p, issue: e.target.value }))} required style={{ marginBottom: 7 }} />
+            <input className="form-input" placeholder="Metric (e.g. CTR, CPM)" value={form.metric} onChange={e => setForm(p => ({ ...p, metric: e.target.value }))} style={{ marginBottom: 7 }} />
+            <input className="form-input" placeholder="Recommendation" value={form.recommendation} onChange={e => setForm(p => ({ ...p, recommendation: e.target.value }))} style={{ marginBottom: 7 }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select className="form-input" style={{ flex: 1 }} value={form.severity} onChange={e => setForm(p => ({ ...p, severity: e.target.value }))}>
+                <option value="minor">Minor</option>
+                <option value="major">Major</option>
+              </select>
+              <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>{saving ? '…' : '+ Add'}</button>
             </div>
-            <div>
-              <label style={ab.label}>Metric</label>
-              <input className="form-input" value={form.metric} onChange={e => setForm(p => ({ ...p, metric: e.target.value }))} placeholder="e.g. CTR, CPM" />
-            </div>
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <label style={ab.label}>Issue *</label>
-            <input className="form-input" value={form.issue} onChange={e => setForm(p => ({ ...p, issue: e.target.value }))} placeholder="Describe the issue" required />
-          </div>
-          <div style={{ marginBottom: 10 }}>
-            <label style={ab.label}>Recommendation</label>
-            <input className="form-input" value={form.recommendation} onChange={e => setForm(p => ({ ...p, recommendation: e.target.value }))} placeholder="What should be done?" />
-          </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <select className="form-input" style={{ width: 140 }} value={form.severity} onChange={e => setForm(p => ({ ...p, severity: e.target.value }))}>
-              <option value="minor">Minor</option>
-              <option value="major">Major</option>
-            </select>
-            <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
-              {saving ? 'Saving…' : 'Save Action'}
-            </button>
-          </div>
-        </form>
-      )}
+          </form>
 
-      {loading ? (
-        <div style={{ padding: 24, textAlign: 'center' }}><div className="spinner" /></div>
-      ) : actions.length === 0 ? (
-        <div style={ab.empty}>No action items for this client.</div>
-      ) : (
-        <div style={ab.list}>
-          {actions.map(a => (
-            <div key={a.id} style={{ ...ab.item, borderLeft: `3px solid ${SEVERITY_COLORS[a.severity] || '#aaa'}` }}>
-              <div style={ab.itemTop}>
-                <div style={{ flex: 1 }}>
-                  {a.campaignName && <div style={ab.campaign}>{a.campaignName}</div>}
-                  <div style={ab.issue}>{a.issue}</div>
-                  {a.recommendation && <div style={ab.rec}>{a.recommendation}</div>}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                  <span style={{ ...ab.statusBadge, color: STATUS_COLORS[a.status], border: `1px solid ${STATUS_COLORS[a.status]}44` }}>
-                    {a.status.replace('_', ' ')}
-                  </span>
-                  <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>by {a.createdBy}</span>
-                </div>
-              </div>
-              <div style={ab.itemActions}>
-                {['open','in_progress','done','escalated'].map(s => (
-                  <button key={s} onClick={() => handleStatus(a.id, s)}
-                    className="btn btn-ghost btn-sm"
-                    style={{ fontSize: 10, padding: '3px 8px', opacity: a.status === s ? 1 : 0.45,
-                      color: a.status === s ? STATUS_COLORS[s] : undefined,
-                      borderColor: a.status === s ? STATUS_COLORS[s] : undefined }}>
-                    {s.replace('_', ' ')}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ab = {
-  wrap:       { marginTop: 24 },
-  header:     { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  title:      { fontSize: 13, fontWeight: 700, color: 'var(--accent)', letterSpacing: 1.2, textTransform: 'uppercase' },
-  badge:      { background: 'rgba(245,166,35,0.15)', color: '#f5a623', border: '1px solid rgba(245,166,35,0.3)', borderRadius: 10, padding: '2px 8px', fontSize: 11, fontWeight: 700 },
-  form:       { background: 'rgba(50,205,50,0.03)', border: '1px solid rgba(50,205,50,0.12)', borderRadius: 10, padding: '16px', marginBottom: 16 },
-  formGrid:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px', marginBottom: 10 },
-  label:      { display: 'block', fontSize: 10, fontWeight: 600, color: 'rgba(232,245,233,0.5)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.8 },
-  empty:      { color: 'rgba(232,245,233,0.3)', fontSize: 13, padding: '20px 0', textAlign: 'center' },
-  list:       { display: 'flex', flexDirection: 'column', gap: 8 },
-  item:       { background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 8, padding: '12px 14px' },
-  itemTop:    { display: 'flex', gap: 12, marginBottom: 8 },
-  campaign:   { fontSize: 11, color: '#32cd32', fontWeight: 700, marginBottom: 3, letterSpacing: 0.5 },
-  issue:      { fontSize: 13, color: 'rgba(232,245,233,0.85)', fontWeight: 600, marginBottom: 3 },
-  rec:        { fontSize: 11, color: 'rgba(232,245,233,0.45)', fontStyle: 'italic' },
-  statusBadge:{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: '2px 7px', textTransform: 'capitalize' },
-  itemActions:{ display: 'flex', gap: 6 },
-};
-
-// ── Client Detail Panel ───────────────────────────────────────────────────────
-function ClientDetail({ clientId, rangeParams, onClose }) {
-  const toast = useToast();
-  const [data,      setData]      = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [tab,       setTab]       = useState('overview');
-  const [diagnosing,setDiagnosing]= useState(false);
-  const [diagnosis, setDiagnosis] = useState(null);
-  const [ctx,       setCtx]       = useState('');
-  const [sort,      setSort]      = useState({ key: 'spend', dir: 'desc' });
-  const [filter,    setFilter]    = useState('');
-
-  useEffect(() => {
-    setLoading(true);
-    setData(null);
-    setDiagnosis(null);
-    monitorAPI.client(clientId, rangeParams)
-      .then(setData)
-      .catch(err => toast(err.response?.data?.error || 'Failed to load client data.', 'error'))
-      .finally(() => setLoading(false));
-  }, [clientId, JSON.stringify(rangeParams)]);
-
-  const handleDiagnose = async () => {
-    setDiagnosing(true);
-    try {
-      const res = await monitorAPI.diagnose(clientId, { ...rangeParams, context: ctx || undefined });
-      setDiagnosis(res.diagnosis);
-    } catch (err) {
-      toast(err.response?.data?.error || 'Diagnosis failed.', 'error');
-    } finally { setDiagnosing(false); }
-  };
-
-  if (loading) return (
-    <div className="glass" style={dp.wrap}>
-      <div style={{ padding: 48, textAlign: 'center' }}><div className="spinner" /></div>
-    </div>
-  );
-
-  if (!data) return null;
-
-  const { client, totals, health, campaigns, adsets, ads, daily, branches } = data;
-
-  // Build treemap data
-  const treemapData = campaigns.map(c => ({
-    name: c.campaign_name?.length > 24 ? c.campaign_name.slice(0, 22) + '…' : c.campaign_name,
-    size: parseFloat(c.spend || 0)
-  })).filter(c => c.size > 0);
-
-  // Build drill-down table rows
-  const allRows = [
-    ...(campaigns || []).map(r => ({ ...r, _level: 'campaign', _name: r.campaign_name })),
-    ...(adsets    || []).map(r => ({ ...r, _level: 'adset',    _name: r.adset_name })),
-    ...(ads       || []).map(r => ({ ...r, _level: 'ad',       _name: r.ad_name })),
-  ];
-  const filtered = allRows.filter(r =>
-    !filter || r._name?.toLowerCase().includes(filter.toLowerCase()) ||
-    r.campaign_name?.toLowerCase().includes(filter.toLowerCase())
-  );
-  const sorted = [...filtered].sort((a, b) => {
-    const av = parseFloat(a[sort.key] || 0), bv = parseFloat(b[sort.key] || 0);
-    return sort.dir === 'desc' ? bv - av : av - bv;
-  });
-
-  const thSort = (key) => ({
-    cursor: 'pointer', userSelect: 'none',
-    color: sort.key === key ? '#32cd32' : undefined,
-    onClick: () => setSort(s => ({ key, dir: s.key === key && s.dir === 'desc' ? 'asc' : 'desc' }))
-  });
-
-  const breachedMap = {};
-  (health.breaches || []).forEach(b => { breachedMap[b.metric] = b; });
-
-  return (
-    <div className="glass" style={dp.wrap}>
-      {/* Header */}
-      <div style={dp.header}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <span style={dp.code}>{client.clientCode}</span>
-            <span style={dp.name}>{client.name}</span>
-            <HealthBadge score={health.score} size="lg" />
-          </div>
-          <div style={{ fontSize: 12, color: 'rgba(232,245,233,0.4)' }}>
-            {data.dateStart} – {data.dateStop}
-            {data.cachedAt && <span style={{ marginLeft: 8 }}>· cached {new Date(data.cachedAt).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}</span>}
-            {health.usingDefaults && <span style={{ marginLeft: 8, color: '#f5a623' }}>· using benchmark defaults</span>}
-          </div>
-        </div>
-        <button onClick={onClose} style={dp.closeBtn}>✕</button>
-      </div>
-
-      {/* KPI strip */}
-      <div style={dp.kpiRow}>
-        {[
-          { label: 'Spend',       value: fmtRM(totals.spend)            },
-          { label: 'Reach',       value: fmtNum(totals.reach)           },
-          { label: 'Impressions', value: fmtNum(totals.impressions)     },
-          { label: 'CTR',         value: fmtPct(totals.ctr),    breached: !!breachedMap['CTR']       },
-          { label: 'CPM',         value: fmtRM(totals.cpm),     breached: !!breachedMap['CPM']       },
-          { label: 'CPR',         value: fmtRM(totals.cpr),     breached: !!breachedMap['CPR']       },
-          { label: 'Frequency',   value: totals.frequency?.toFixed(2),  breached: !!breachedMap['Frequency'] },
-          { label: 'Results',     value: fmtNum(totals.primaryResults)  },
-        ].map(k => (
-          <div key={k.label} style={dp.kpi}>
-            <div style={{ ...dp.kpiVal, color: k.breached ? '#ff4d4d' : 'var(--text-primary)' }}>{k.value}</div>
-            <div style={dp.kpiLabel}>{k.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Tabs */}
-      <div style={dp.tabs}>
-        {['overview','treemap','table'].map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{ ...dp.tab, ...(tab === t ? dp.tabActive : {}) }}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Tab: Overview */}
-      {tab === 'overview' && (
-        <div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 24 }}>
-            <thead>
-              <tr style={{ background: 'rgba(7,80,60,0.4)' }}>
-                <th style={{ ...td.label, fontWeight: 700, color: '#32cd32' }}>Metric</th>
-                <th style={{ ...td.label, fontWeight: 700, color: '#32cd32' }}>Value</th>
-                <th style={{ ...td.label, fontWeight: 700, color: '#32cd32' }}>Threshold</th>
-                <th style={{ ...td.label, fontWeight: 700, color: '#32cd32' }}>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <MetricRow label="CTR"       value={fmtPct(totals.ctr)}            threshold={health.thresholds?.ctr}       direction="below" breached={!!breachedMap['CTR']}       usingDefaults={health.usingDefaults} />
-              <MetricRow label="CPM"       value={fmtRM(totals.cpm)}             threshold={`RM ${health.thresholds?.cpm}`} direction="above" breached={!!breachedMap['CPM']}       usingDefaults={health.usingDefaults} />
-              <MetricRow label="CPR"       value={fmtRM(totals.cpr)}             threshold={`RM ${health.thresholds?.cpr}`} direction="above" breached={!!breachedMap['CPR']}       usingDefaults={health.usingDefaults} />
-              <MetricRow label="Frequency" value={totals.frequency?.toFixed(2)}  threshold={health.thresholds?.frequency} direction="above" breached={!!breachedMap['Frequency']} usingDefaults={health.usingDefaults} />
-            </tbody>
-          </table>
-
-          {/* VK branches */}
-          {branches && (
-            <div style={{ marginBottom: 24 }}>
-              <div style={dp.subTitle}>Branch Breakdown (Viking Fitness)</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
-                {Object.entries(branches).map(([branch, d]) => (
-                  <div key={branch} className="glass" style={{ padding: '14px 16px', borderRadius: 10 }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: '#32cd32', marginBottom: 4 }}>{branch}</div>
-                    <div style={{ fontSize: 12, color: 'rgba(232,245,233,0.7)' }}>{fmtRM(d.spend)} spend</div>
-                    <div style={{ fontSize: 11, color: 'rgba(232,245,233,0.4)' }}>{fmtNum(d.results)} results</div>
+          <div style={aw.list}>
+            {actions.length === 0
+              ? <div style={aw.empty}>No actions yet.</div>
+              : actions.map(a => (
+                  <div key={a.id} style={{ ...aw.item, borderLeft: `3px solid ${a.severity === 'major' ? '#ff4d4d' : '#f5a623'}` }}>
+                    <div style={aw.itemIssue}>{a.issue}</div>
+                    {a.recommendation && <div style={aw.itemRec}>{a.recommendation}</div>}
+                    <div style={aw.itemMeta}>
+                      <span style={{ color: { open:'#f5a623', in_progress:'#1A7FCC', done:'#32cd32', escalated:'#ff4d4d' }[a.status] || '#aaa', fontSize: 10, fontWeight: 700 }}>
+                        {a.status.replace('_', ' ')}
+                      </span>
+                      <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>{a.createdBy}</span>
+                    </div>
+                    <div style={aw.itemBtns}>
+                      {['open','in_progress','done','escalated'].map(s => (
+                        <button key={s} onClick={() => handleStatus(a.id, s)} className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 9, padding: '2px 6px', opacity: a.status === s ? 1 : 0.4 }}>{s.replace('_', ' ')}</button>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* AI Diagnosis */}
-          <div style={dp.diagnoseWrap}>
-            <div style={dp.subTitle}>AI Diagnosis</div>
-            <textarea
-              className="form-input"
-              rows={2}
-              placeholder="Optional: add context for the AI (e.g. campaign changes, client notes)…"
-              value={ctx}
-              onChange={e => setCtx(e.target.value)}
-              style={{ marginBottom: 10, resize: 'vertical' }}
-            />
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleDiagnose}
-              disabled={diagnosing}
-              style={{ marginBottom: diagnosis ? 16 : 0 }}
-            >
-              {diagnosing
-                ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Diagnosing…</>
-                : '◎ Run AI Diagnosis'
-              }
-            </button>
-            {diagnosis && (
-              <div style={dp.diagnosisBox}>
-                <div style={{ fontSize: 11, color: '#32cd32', fontWeight: 700, marginBottom: 10, letterSpacing: 1 }}>AI DIAGNOSIS</div>
-                {diagnosis.split('\n').filter(l => l.trim()).map((line, i) => (
-                  <p key={i} style={{ fontSize: 13, color: 'rgba(232,245,233,0.8)', lineHeight: 1.7, margin: '0 0 8px' }}>{line}</p>
-                ))}
-              </div>
-            )}
+                ))
+            }
           </div>
         </div>
       )}
-
-      {/* Tab: Treemap */}
-      {tab === 'treemap' && (
-        <div>
-          <div style={{ fontSize: 12, color: 'rgba(232,245,233,0.4)', marginBottom: 12 }}>
-            Spend distribution by campaign — darker = higher level
-          </div>
-          {treemapData.length === 0 ? (
-            <div style={{ color: 'rgba(232,245,233,0.3)', padding: '32px 0', textAlign: 'center' }}>No spend data available.</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={340}>
-              <Treemap
-                data={treemapData}
-                dataKey="size"
-                aspectRatio={4 / 3}
-                content={<TreemapContent />}
-              >
-                <Tooltip formatter={(v) => fmtRM(v)} contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 12 }} />
-              </Treemap>
-            </ResponsiveContainer>
-          )}
-        </div>
-      )}
-
-      {/* Tab: Table */}
-      {tab === 'table' && (
-        <div>
-          <input
-            className="form-input"
-            placeholder="Filter by name…"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-            style={{ marginBottom: 12, maxWidth: 320 }}
-          />
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Level</th>
-                  <th>Name</th>
-                  <th style={thSort('spend')}>Spend {sort.key === 'spend' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                  <th style={thSort('impressions')}>Impr. {sort.key === 'impressions' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                  <th style={thSort('clicks')}>Clicks {sort.key === 'clicks' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                  <th style={thSort('ctr')}>CTR {sort.key === 'ctr' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                  <th style={thSort('cpm')}>CPM {sort.key === 'cpm' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                  <th style={thSort('cpc')}>CPC {sort.key === 'cpc' ? (sort.dir === 'desc' ? '↓' : '↑') : ''}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r, i) => (
-                  <tr key={i}>
-                    <td>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
-                        background: r._level === 'campaign' ? 'rgba(7,80,60,0.5)' : r._level === 'adset' ? 'rgba(26,127,204,0.2)' : 'rgba(232,160,0,0.15)',
-                        color:      r._level === 'campaign' ? '#32cd32'           : r._level === 'adset' ? '#1A7FCC'               : '#E8A000',
-                      }}>{r._level}</span>
-                    </td>
-                    <td style={{ fontSize: 12, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r._name}>{r._name}</td>
-                    <td>{fmtRM(r.spend)}</td>
-                    <td>{fmtNum(r.impressions)}</td>
-                    <td>{fmtNum(r.clicks)}</td>
-                    <td style={{ color: parseFloat(r.ctr) < 0.8 ? '#ff4d4d' : 'inherit' }}>{fmtPct(r.ctr)}</td>
-                    <td style={{ color: parseFloat(r.cpm) > 25 ? '#ff4d4d' : 'inherit' }}>{fmtRM(r.cpm)}</td>
-                    <td>{fmtRM(r.cpc)}</td>
-                  </tr>
-                ))}
-                {sorted.length === 0 && (
-                  <tr><td colSpan={8} style={{ textAlign: 'center', color: 'rgba(232,245,233,0.3)', padding: 24 }}>No results.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Action Board */}
-      <ActionBoard clientId={clientId} clientCode={client.clientCode} />
-    </div>
+    </>
   );
 }
 
-const dp = {
-  wrap:        { padding: '24px 28px', marginBottom: 16 },
-  header:      { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
-  code:        { fontSize: 13, fontWeight: 800, color: '#32cd32', letterSpacing: 2 },
-  name:        { fontSize: 18, fontWeight: 700, color: 'var(--text-primary)' },
-  closeBtn:    { background: 'none', border: '1px solid rgba(232,245,233,0.15)', color: 'rgba(232,245,233,0.5)', borderRadius: 6, width: 32, height: 32, cursor: 'pointer', fontSize: 14, flexShrink: 0 },
-  kpiRow:      { display: 'flex', gap: 0, marginBottom: 24, borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(50,205,50,0.15)' },
-  kpi:         { flex: 1, padding: '14px 10px', textAlign: 'center', borderRight: '1px solid rgba(50,205,50,0.1)', background: 'rgba(7,80,60,0.2)' },
-  kpiVal:      { fontSize: 16, fontWeight: 800, lineHeight: 1.1, marginBottom: 4 },
-  kpiLabel:    { fontSize: 10, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.8 },
-  tabs:        { display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid rgba(50,205,50,0.12)', paddingBottom: 0 },
-  tab:         { background: 'none', border: 'none', borderBottom: '2px solid transparent', color: 'rgba(232,245,233,0.4)', fontSize: 13, fontWeight: 600, padding: '8px 16px', cursor: 'pointer', marginBottom: -1 },
-  tabActive:   { color: '#32cd32', borderBottomColor: '#32cd32' },
-  subTitle:    { fontSize: 12, fontWeight: 700, color: 'var(--accent)', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 12 },
-  diagnoseWrap:{ marginTop: 8 },
-  diagnosisBox:{ background: 'rgba(50,205,50,0.04)', border: '1px solid rgba(50,205,50,0.15)', borderRadius: 10, padding: '16px 20px', marginTop: 4 },
+const aw = {
+  fab:       { position: 'fixed', bottom: 28, right: 28, width: 48, height: 48, borderRadius: '50%', background: '#32cd32', color: '#03140e', border: 'none', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, boxShadow: '0 4px 16px rgba(50,205,50,0.4)', fontWeight: 900 },
+  fabBadge:  { position: 'absolute', top: -4, right: -4, background: '#ff4d4d', color: '#fff', borderRadius: '50%', width: 18, height: 18, fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg)' },
+  panel:     { position: 'fixed', bottom: 86, right: 28, width: 320, maxHeight: '70vh', background: 'var(--card-bg,#0a1f16)', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 12, display: 'flex', flexDirection: 'column', zIndex: 299, boxShadow: '0 8px 40px rgba(0,0,0,0.5)', overflow: 'hidden' },
+  panelHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(50,205,50,0.1)', background: 'rgba(7,80,60,0.3)', flexShrink: 0 },
+  panelTitle:{ fontSize: 12, fontWeight: 800, color: '#32cd32', letterSpacing: 1, textTransform: 'uppercase', flex: 1 },
+  panelClient:{ fontSize: 10, color: 'rgba(232,245,233,0.4)', fontWeight: 700 },
+  closeBtn:  { background: 'none', border: 'none', color: 'rgba(232,245,233,0.4)', cursor: 'pointer', fontSize: 12 },
+  form:      { padding: '12px 16px', borderBottom: '1px solid rgba(50,205,50,0.08)', flexShrink: 0 },
+  list:      { overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, flex: 1 },
+  empty:     { color: 'rgba(232,245,233,0.25)', fontSize: 12, textAlign: 'center', padding: '16px 0' },
+  item:      { background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 7, padding: '10px 12px' },
+  itemIssue: { fontSize: 12, color: 'rgba(232,245,233,0.85)', fontWeight: 600, marginBottom: 3 },
+  itemRec:   { fontSize: 11, color: 'rgba(232,245,233,0.4)', fontStyle: 'italic', marginBottom: 5 },
+  itemMeta:  { display: 'flex', gap: 10, marginBottom: 6 },
+  itemBtns:  { display: 'flex', gap: 4, flexWrap: 'wrap' },
 };
 
-// ── Overview Card ─────────────────────────────────────────────────────────────
-function ClientCard({ card, onClick, selected }) {
-  if (card.error) {
-    return (
-      <div className="glass" style={{ ...oc.card, borderColor: 'rgba(255,77,77,0.3)', cursor: 'default' }}>
-        <div style={oc.code}>{card.clientCode}</div>
-        <div style={oc.name}>{card.name}</div>
-        <div style={{ fontSize: 11, color: '#ff4d4d', marginTop: 8 }}>⚠ {card.error}</div>
-      </div>
-    );
-  }
-
-  const { totals, health, todaySpend, monthlyBudget, branches } = card;
-  const budgetPct = monthlyBudget && todaySpend ? Math.min((totals.spend / monthlyBudget) * 100, 100) : null;
-
+// ── Client Panel ──────────────────────────────────────────────────────────────
+function ClientPanel({ clients, selectedId, onSelect, collapsed, onToggleCollapse, selectedBranch, onSelectBranch }) {
+  const w = collapsed ? 48 : 200;
   return (
-    <div
-      className="glass"
-      onClick={onClick}
-      style={{
-        ...oc.card,
-        borderColor: selected ? HEALTH_COLOR[health.score] : `${HEALTH_COLOR[health.score]}33`,
-        boxShadow: selected ? `0 0 0 2px ${HEALTH_COLOR[health.score]}44` : undefined,
-        cursor: 'pointer'
-      }}
-    >
-      <div style={oc.cardTop}>
-        <div>
-          <div style={oc.code}>{card.clientCode}</div>
-          <div style={oc.name}>{card.name}</div>
-        </div>
-        <HealthBadge score={health.score} />
-      </div>
+    <div style={{ ...cp.panel, width: w, minWidth: w, maxWidth: w }}>
+      <button onClick={onToggleCollapse} style={cp.collapseBtn} title={collapsed ? 'Expand' : 'Collapse'}>
+        <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>‹</span>
+      </button>
 
-      {/* Spend vs budget */}
-      <div style={oc.spendRow}>
-        <div>
-          <div style={oc.spendToday}>Today: {fmtRM(todaySpend)}</div>
-          <div style={oc.spendPeriod}>{fmtRM(totals.spend)} ({card.rangeKey})</div>
-        </div>
-        {monthlyBudget && (
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 10, color: 'rgba(232,245,233,0.4)' }}>of {fmtRM(monthlyBudget)}</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: budgetPct > 90 ? '#ff4d4d' : '#32cd32' }}>{budgetPct?.toFixed(0)}%</div>
-          </div>
-        )}
-      </div>
+      {!collapsed && <div style={cp.heading}>Clients</div>}
 
-      {/* Budget progress bar */}
-      {budgetPct !== null && (
-        <div style={oc.progressTrack}>
-          <div style={{ ...oc.progressBar, width: `${budgetPct}%`, background: budgetPct > 90 ? '#ff4d4d' : budgetPct > 70 ? '#f5a623' : '#32cd32' }} />
-        </div>
-      )}
-
-      {/* Key metrics */}
-      <div style={oc.metrics}>
-        {[
-          { label: 'CTR', value: fmtPct(totals.ctr), bad: health.breaches?.some(b => b.metric === 'CTR') },
-          { label: 'CPM', value: fmtRM(totals.cpm),  bad: health.breaches?.some(b => b.metric === 'CPM') },
-          { label: 'CPR', value: fmtRM(totals.cpr),  bad: health.breaches?.some(b => b.metric === 'CPR') },
-        ].map(m => (
-          <div key={m.label} style={oc.metric}>
-            <div style={{ ...oc.metricVal, color: m.bad ? '#ff4d4d' : 'var(--text-primary)' }}>{m.value}</div>
-            <div style={oc.metricLabel}>{m.label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* VK branch sub-rows */}
-      {branches && (
-        <div style={oc.branches}>
-          {Object.entries(branches).map(([b, d]) => (
-            <div key={b} style={oc.branch}>
-              <span style={oc.branchCode}>{b}</span>
-              <span style={oc.branchSpend}>{fmtRM(d.spend)}</span>
-              <span style={oc.branchResults}>{fmtNum(d.results)} results</span>
+      <div style={cp.list}>
+        {clients.map(c => {
+          const isSelected = c.id === selectedId;
+          return (
+            <div key={c.id}>
+              <button
+                onClick={() => onSelect(c.id)}
+                style={{
+                  ...cp.item,
+                  background: isSelected ? 'rgba(50,205,50,0.12)' : 'transparent',
+                  border: isSelected ? '1px solid rgba(50,205,50,0.3)' : '1px solid transparent',
+                  justifyContent: collapsed ? 'center' : 'flex-start',
+                }}
+                title={collapsed ? c.name : ''}
+              >
+                <span style={{ ...cp.avatar, background: isSelected ? '#32cd32' : '#1a3a2a', color: isSelected ? '#03140e' : '#32cd32' }}>
+                  {c.clientCode?.[0]}
+                </span>
+                {!collapsed && (
+                  <div style={{ overflow: 'hidden' }}>
+                    <div style={cp.code}>{c.clientCode}</div>
+                    <div style={cp.name}>{c.name}</div>
+                  </div>
+                )}
+              </button>
+              {/* VK Branch filter */}
+              {isSelected && c.clientCode === 'VK' && !collapsed && (
+                <div style={cp.branches}>
+                  {['ALL', 'KL', 'RC', 'CR'].map(b => (
+                    <button key={b} onClick={() => onSelectBranch(b)}
+                      style={{ ...cp.branch, background: selectedBranch === b ? '#32cd32' : 'rgba(50,205,50,0.08)', color: selectedBranch === b ? '#03140e' : '#32cd32' }}>
+                      {b}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* Breach pills */}
-      {health.breaches?.length > 0 && (
-        <div style={oc.breaches}>
-          {health.breaches.map(b => (
-            <span key={b.metric} style={oc.breachPill}>⚠ {b.metric}</span>
-          ))}
-        </div>
-      )}
-
-      {/* Analyse CTA */}
-      <div style={oc.analyseCta}>
-        <span style={oc.analyseBtn}>{selected ? '▼ Close' : '◎ Analyse & AI Diagnose'}</span>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-const oc = {
-  card:          { padding: '18px 20px', borderRadius: 12, border: '1px solid', transition: 'all 0.2s' },
-  cardTop:       { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  code:          { fontSize: 11, fontWeight: 800, color: '#32cd32', letterSpacing: 2, marginBottom: 2 },
-  name:          { fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' },
-  spendRow:      { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 8 },
-  spendToday:    { fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' },
-  spendPeriod:   { fontSize: 11, color: 'rgba(232,245,233,0.4)', marginTop: 2 },
-  progressTrack: { height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, marginBottom: 14, overflow: 'hidden' },
-  progressBar:   { height: '100%', borderRadius: 2, transition: 'width 0.4s ease' },
-  metrics:       { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 0, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 12 },
-  metric:        { textAlign: 'center' },
-  metricVal:     { fontSize: 13, fontWeight: 700 },
-  metricLabel:   { fontSize: 10, color: 'rgba(232,245,233,0.35)', textTransform: 'uppercase', letterSpacing: 0.6 },
-  branches:      { marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 },
-  branch:        { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, padding: '4px 0', borderTop: '1px solid rgba(255,255,255,0.04)' },
-  branchCode:    { fontWeight: 800, color: '#32cd32', width: 28 },
-  branchSpend:   { color: 'rgba(232,245,233,0.7)', flex: 1 },
-  branchResults: { color: 'rgba(232,245,233,0.4)' },
-  breaches:      { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
-  breachPill:    { fontSize: 10, color: '#ff4d4d', background: 'rgba(255,77,77,0.1)', border: '1px solid rgba(255,77,77,0.25)', borderRadius: 10, padding: '2px 8px', fontWeight: 700 },
-  analyseCta:    { marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(50,205,50,0.1)', textAlign: 'center' },
-  analyseBtn:    { fontSize: 11, fontWeight: 700, color: '#32cd32', letterSpacing: 0.5, opacity: 0.8 },
+const cp = {
+  panel:       { background: '#03140e', borderRight: '1px solid rgba(50,205,50,0.12)', display: 'flex', flexDirection: 'column', padding: '60px 0 16px', position: 'relative', transition: 'width 0.25s ease', flexShrink: 0, overflowX: 'hidden' },
+  collapseBtn: { position: 'absolute', top: 14, right: -12, width: 24, height: 24, borderRadius: '50%', background: '#32cd32', color: '#03140e', border: 'none', fontSize: 16, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  heading:     { fontSize: 9, fontWeight: 800, color: 'rgba(50,205,50,0.4)', letterSpacing: 2.5, textTransform: 'uppercase', padding: '0 14px', marginBottom: 10 },
+  list:        { display: 'flex', flexDirection: 'column', gap: 2, padding: '0 6px', overflowY: 'auto', flex: 1 },
+  item:        { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 6px', borderRadius: 8, cursor: 'pointer', width: '100%', textAlign: 'left', transition: 'all 0.15s', whiteSpace: 'nowrap', overflow: 'hidden' },
+  avatar:      { width: 28, height: 28, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, flexShrink: 0, transition: 'all 0.15s' },
+  code:        { fontSize: 10, fontWeight: 800, color: '#32cd32', letterSpacing: 1.2 },
+  name:        { fontSize: 11, color: 'rgba(232,245,233,0.6)', overflow: 'hidden', textOverflow: 'ellipsis' },
+  branches:    { display: 'flex', gap: 4, padding: '4px 8px 8px', flexWrap: 'wrap' },
+  branch:      { fontSize: 9, fontWeight: 800, borderRadius: 4, padding: '3px 7px', border: 'none', cursor: 'pointer', transition: 'all 0.15s', letterSpacing: 0.5 },
 };
+
+// ── Section wrapper ───────────────────────────────────────────────────────────
+function Section({ title, children, right }) {
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: 'rgba(50,205,50,0.6)', letterSpacing: 2, textTransform: 'uppercase' }}>{title}</div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AdsMonitor() {
-  const toast = useToast();
-  const [overview,    setOverview]    = useState(null);
-  const [loading,     setLoading]     = useState(true);
+  const toast  = useToast();
+  const { user } = useAuth();
+
+  // Layout
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+
+  // Clients
+  const [clients,     setClients]     = useState([]);
   const [selectedId,  setSelectedId]  = useState(null);
+  const [selectedBranch, setSelectedBranch] = useState('ALL');
+
+  // Data
+  const [clientData,    setClientData]    = useState(null);
+  const [audienceData,  setAudienceData]  = useState(null);
+  const [loadingMain,   setLoadingMain]   = useState(false);
+  const [loadingAudience, setLoadingAudience] = useState(false);
+
+  // Date range
   const [range,       setRange]       = useState('30d');
   const [customStart, setCustomStart] = useState('');
   const [customEnd,   setCustomEnd]   = useState('');
-  const [refreshing,  setRefreshing]  = useState(false);
-  const detailRef = useRef(null);
 
-  const rangeParams = range === 'custom' && customStart && customEnd
-    ? { dateStart: customStart, dateStop: customEnd }
-    : { range };
+  // Line chart
+  const [activeMetrics, setActiveMetrics] = useState([]);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true); else setLoading(true);
-    try {
-      const data = await monitorAPI.overview(rangeParams);
-      setOverview(data);
-    } catch (err) {
-      toast(err.response?.data?.error || 'Failed to load monitor data.', 'error');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [JSON.stringify(rangeParams)]);
+  // AI
+  const [showAI,     setShowAI]     = useState(false);
+  const [aiFindings, setAiFindings] = useState(null);
+  const [loadingAI,  setLoadingAI]  = useState(false);
+  const [aiConfirm,  setAiConfirm]  = useState(false);
+  const [aiCtx,      setAiCtx]      = useState('');
 
-  useEffect(() => { load(); }, [load]);
+  // Engagement funnel
+  const [funnelType, setFunnelType] = useState('conversion');
 
-  const handleCardClick = (id) => {
-    setSelectedId(prev => {
-      const next = prev === id ? null : id;
-      if (next) setTimeout(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-      return next;
+  // Audience metric
+  const [audienceMetric, setAudienceMetric] = useState('impressions');
+
+  const rangeParams = useMemo(() => (
+    range === 'custom' && customStart && customEnd
+      ? { dateStart: customStart, dateStop: customEnd }
+      : { range }
+  ), [range, customStart, customEnd]);
+
+  // Load client list
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await monitorAPI.overview(rangeParams);
+        const list = (data.cards || []).filter(c => !c.error);
+        setClients(list);
+        if (!selectedId && list.length > 0) setSelectedId(list[0].id);
+      } catch (err) {
+        toast(err.response?.data?.error || 'Failed to load clients.', 'error');
+      }
+    };
+    load();
+  }, []);
+
+  // Load main client data when selection or range changes
+  useEffect(() => {
+    if (!selectedId) return;
+    const load = async () => {
+      setLoadingMain(true);
+      setClientData(null);
+      setAiFindings(null);
+      setShowAI(false);
+      setActiveMetrics([]);
+      try {
+        const data = await monitorAPI.client(selectedId, rangeParams);
+        setClientData(data);
+      } catch (err) {
+        toast(err.response?.data?.error || 'Failed to load client data.', 'error');
+      } finally { setLoadingMain(false); }
+    };
+    load();
+  }, [selectedId, JSON.stringify(rangeParams)]);
+
+  // Load audience data separately
+  useEffect(() => {
+    if (!selectedId) return;
+    const load = async () => {
+      setLoadingAudience(true);
+      setAudienceData(null);
+      try {
+        const data = await monitorAPI.audience(selectedId, rangeParams);
+        setAudienceData(data);
+      } catch { /* audience section shows empty state */ }
+      finally { setLoadingAudience(false); }
+    };
+    load();
+  }, [selectedId, JSON.stringify(rangeParams)]);
+
+  const handleSelectClient = (id) => {
+    setSelectedId(id);
+    setSelectedBranch('ALL');
+  };
+
+  const toggleMetric = (key) => {
+    setActiveMetrics(prev => {
+      if (prev.includes(key)) return prev.filter(k => k !== key);
+      if (prev.length >= 3)   return [...prev.slice(1), key];
+      return [...prev, key];
     });
   };
 
-  const greenCount  = overview?.cards?.filter(c => c.health?.score === 'green').length  || 0;
-  const yellowCount = overview?.cards?.filter(c => c.health?.score === 'yellow').length || 0;
-  const redCount    = overview?.cards?.filter(c => c.health?.score === 'red').length    || 0;
+  const handleAIClick = () => {
+    if (!showAI) { setAiConfirm(true); return; }
+    setShowAI(false);
+    setAiFindings(null);
+  };
+
+  const handleAIConfirm = async () => {
+    setAiConfirm(false);
+    setShowAI(true);
+    setLoadingAI(true);
+    setAiFindings(null);
+    try {
+      const res = await monitorAPI.diagnose(selectedId, { ...rangeParams, context: aiCtx || undefined });
+      setAiFindings(res.findings || []);
+    } catch (err) {
+      toast(err.response?.data?.error || 'AI diagnosis failed.', 'error');
+      setShowAI(false);
+    } finally { setLoadingAI(false); }
+  };
+
+  // Build display totals (branch-aware)
+  const displayTotals = useMemo(() => {
+    if (!clientData) return null;
+    const { totals, branches } = clientData;
+    if (selectedBranch === 'ALL' || !branches || !branches[selectedBranch]) return totals;
+    const b = branches[selectedBranch];
+    const ctr = b.impressions > 0 ? b.clicks / b.impressions * 100 : 0;
+    const cpm = b.impressions > 0 ? b.spend  / b.impressions * 1000 : 0;
+    const cpc = b.clicks      > 0 ? b.spend  / b.clicks : 0;
+    const days = clientData.daily?.length || 1;
+    return { ...totals, spend: b.spend, impressions: b.impressions, clicks: b.clicks, ctr, cpm, cpc, waConvos: b.results, primaryResults: b.results, avgDailySpend: b.spend / days };
+  }, [clientData, selectedBranch]);
+
+  const displayPrevTotals = clientData?.prevTotals;
+
+  // Process daily data for chart
+  const chartDaily = useMemo(() => {
+    if (!clientData?.daily) return [];
+    return clientData.daily.map(d => ({
+      date_start:   d.date_start,
+      spend:        parseFloat(d.spend        || 0),
+      reach:        parseFloat(d.reach        || 0),
+      impressions:  parseFloat(d.impressions  || 0),
+      clicks:       parseFloat(d.clicks       || 0),
+      ctr:          parseFloat(d.ctr          || 0),
+      cpm:          parseFloat(d.cpm          || 0),
+      cpc:          parseFloat(d.cpc          || 0),
+      waConvos:     extractFromActions(d.actions, 'onsite_conversion.messaging_first_reply'),
+    }));
+  }, [clientData]);
+
+  const selectedClient = clients.find(c => c.id === selectedId);
 
   return (
-    <div style={pg.page} className="fade-up">
-      {/* Page header */}
-      <div style={pg.header}>
-        <div>
-          <h1 style={pg.title}>Ads Monitor</h1>
-          <p style={pg.sub}>Live Meta Ads health across all assigned clients</p>
-        </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Health summary pills */}
-          {!loading && overview && (
-            <div style={{ display: 'flex', gap: 6 }}>
-              <span style={{ ...pg.pill, background: 'rgba(50,205,50,0.12)',  color: '#32cd32',  border: '1px solid rgba(50,205,50,0.25)'  }}>{greenCount} healthy</span>
-              <span style={{ ...pg.pill, background: 'rgba(245,166,35,0.12)', color: '#f5a623',  border: '1px solid rgba(245,166,35,0.25)' }}>{yellowCount} at risk</span>
-              <span style={{ ...pg.pill, background: 'rgba(255,77,77,0.12)',  color: '#ff4d4d',  border: '1px solid rgba(255,77,77,0.25)'  }}>{redCount} critical</span>
-            </div>
-          )}
-          {/* Refresh button */}
-          <button className="btn btn-ghost btn-sm" onClick={() => load(true)} disabled={refreshing || loading}>
-            {refreshing ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Refreshing…</> : '↺ Refresh'}
-          </button>
-        </div>
-      </div>
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
+      {/* Inner client panel */}
+      <ClientPanel
+        clients={clients}
+        selectedId={selectedId}
+        onSelect={handleSelectClient}
+        collapsed={panelCollapsed}
+        onToggleCollapse={() => setPanelCollapsed(v => !v)}
+        selectedBranch={selectedBranch}
+        onSelectBranch={setSelectedBranch}
+      />
 
-      {/* Range selector */}
-      <div style={pg.rangeBar}>
-        {RANGE_OPTIONS.map(opt => (
-          <button key={opt.value} onClick={() => setRange(opt.value)}
-            className="btn btn-ghost btn-sm"
-            style={{ borderColor: range === opt.value ? 'rgba(50,205,50,0.5)' : undefined, color: range === opt.value ? '#32cd32' : undefined }}>
-            {opt.label}
-          </button>
-        ))}
-        {range === 'custom' && (
+      {/* Main content */}
+      <div style={{ flex: 1, overflowX: 'hidden', padding: '28px 32px' }} className="fade-up">
+
+        {/* Page header */}
+        <div style={pg.header}>
+          <div>
+            <h1 style={pg.title}>Analytic</h1>
+            <p style={pg.sub}>{selectedClient ? `${selectedClient.clientCode} — ${selectedClient.name}` : 'Select a client'}</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {/* AI button */}
+            <button
+              className={`btn ${showAI ? 'btn-primary' : 'btn-ghost'} btn-sm`}
+              onClick={handleAIClick}
+              disabled={!clientData || loadingAI}
+              style={{ borderColor: showAI ? '#32cd32' : undefined }}
+            >
+              {loadingAI ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Analysing…</> : showAI ? '✕ Hide AI' : '◎ AI Analyse'}
+            </button>
+          </div>
+        </div>
+
+        {/* AI confirm dialog */}
+        {aiConfirm && (
+          <div style={pg.confirmBox}>
+            <div style={pg.confirmText}>
+              ⚠ Running AI diagnosis uses API tokens (costs money). Confirm to proceed?
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <input className="form-input" placeholder="Optional: add context for AI…" value={aiCtx} onChange={e => setAiCtx(e.target.value)} style={{ marginTop: 8 }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={handleAIConfirm}>Confirm</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setAiConfirm(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {/* Date range bar */}
+        <div style={pg.rangeBar}>
+          {RANGES.map(r => (
+            <button key={r.value} onClick={() => setRange(r.value)} className="btn btn-ghost btn-sm"
+              style={{ borderColor: range === r.value ? 'rgba(50,205,50,0.5)' : undefined, color: range === r.value ? '#32cd32' : undefined }}>
+              {r.label}
+            </button>
+          ))}
+          {range === 'custom' && (
+            <>
+              <input type="date" className="form-input" style={{ width: 140 }} value={customStart} onChange={e => setCustomStart(e.target.value)} />
+              <span style={{ color: 'rgba(232,245,233,0.4)', alignSelf: 'center' }}>→</span>
+              <input type="date" className="form-input" style={{ width: 140 }} value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
+            </>
+          )}
+          {clientData?.dateStart && (
+            <span style={{ fontSize: 11, color: 'rgba(232,245,233,0.25)', marginLeft: 8, alignSelf: 'center' }}>
+              {clientData.dateStart} → {clientData.dateStop}
+              {clientData.cachedAt && ` · cached ${new Date(clientData.cachedAt).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}`}
+            </span>
+          )}
+        </div>
+
+        {loadingMain ? (
+          <div style={{ padding: 80, textAlign: 'center' }}><div className="spinner" /></div>
+        ) : !clientData ? (
+          <div style={{ padding: 60, textAlign: 'center', color: 'rgba(232,245,233,0.25)' }}>Select a client to view analytics</div>
+        ) : (
           <>
-            <input type="date" className="form-input" style={{ width: 150 }} value={customStart} onChange={e => setCustomStart(e.target.value)} />
-            <span style={{ color: 'rgba(232,245,233,0.4)', alignSelf: 'center' }}>→</span>
-            <input type="date" className="form-input" style={{ width: 150 }} value={customEnd}   onChange={e => setCustomEnd(e.target.value)}   />
+            {/* ── PERFORMANCE SECTION ── */}
+            <Section title="Performance" right={
+              clientData?.prevDateStart && (
+                <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>
+                  vs {clientData.prevDateStart} → {clientData.prevDateStop}
+                </span>
+              )
+            }>
+              {/* AI Findings */}
+              {showAI && <AIFindingsRow findings={aiFindings} loading={loadingAI} />}
+
+              {/* Metric cards grid */}
+              <div style={pg.metricGrid}>
+                {METRICS.map(m => (
+                  <MetricCard
+                    key={m.key}
+                    metric={m}
+                    value={m.key === 'active' ? clientData.activeCampaignCount : displayTotals?.[m.key]}
+                    prevValue={m.key === 'active' ? null : displayPrevTotals?.[m.key]}
+                    activeCampaignCount={clientData.activeCampaignCount}
+                    active={activeMetrics.includes(m.key)}
+                    onClick={() => m.chartFmt !== null && toggleMetric(m.key)}
+                  />
+                ))}
+              </div>
+
+              {/* Line chart */}
+              <div className="glass" style={{ padding: '16px 20px', marginTop: 16, borderRadius: 12 }}>
+                <div style={{ fontSize: 11, color: 'rgba(232,245,233,0.35)', marginBottom: 8 }}>
+                  {activeMetrics.length === 0
+                    ? 'Click metric cards to plot on chart (max 3 at a time)'
+                    : `Plotting: ${activeMetrics.map(k => METRICS.find(m => m.key === k)?.label).join(' · ')}`}
+                </div>
+                <MetricLineChart daily={chartDaily} activeMetricKeys={activeMetrics} />
+              </div>
+            </Section>
+
+            {/* ── ENGAGEMENT SECTION ── */}
+            <Section title="Engagement">
+              <div style={pg.engagementGrid}>
+                {/* Post engagement donut */}
+                <div className="glass" style={pg.engCard}>
+                  <div style={pg.engCardTitle}>Post Engagement</div>
+                  <EngagementDonut
+                    reactions={displayTotals?.reactions || 0}
+                    comments={displayTotals?.comments || 0}
+                    shares={displayTotals?.shares || 0}
+                    saves={displayTotals?.saves || 0}
+                  />
+                </div>
+
+                {/* Engagement metric cards */}
+                <div className="glass" style={pg.engCard}>
+                  <div style={pg.engCardTitle}>Engagement Metrics</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {[
+                      { label: 'Video Views',     value: fmtNum(displayTotals?.videoViews    || 0) },
+                      { label: 'Page Engagement', value: fmtNum(displayTotals?.pageEngagement|| 0) },
+                      { label: 'FB Page Likes',   value: fmtNum(displayTotals?.pageLikes     || 0) },
+                      { label: 'IG Follows',      value: fmtNum(displayTotals?.igFollows     || 0) },
+                      { label: 'Avg Watch Time',  value: fmtSec(displayTotals?.videoAvgWatch || 0) },
+                    ].map(item => (
+                      <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <span style={{ fontSize: 12, color: 'rgba(232,245,233,0.5)' }}>{item.label}</span>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Funnel */}
+                <div className="glass" style={pg.engCard}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div style={pg.engCardTitle}>Conversion Funnel</div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {[{ key: 'conversion', label: 'WA' }, { key: 'video', label: 'Video' }].map(t => (
+                        <button key={t.key} onClick={() => setFunnelType(t.key)} className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '3px 8px', borderColor: funnelType === t.key ? '#32cd32' : undefined, color: funnelType === t.key ? '#32cd32' : undefined }}>
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <ConversionFunnel
+                    reach={displayTotals?.reach || 0}
+                    clicks={displayTotals?.clicks || 0}
+                    messages={displayTotals?.waConvos || 0}
+                    funnelType={funnelType}
+                    videoP25={displayTotals?.videoP25 || 0}
+                    videoP50={displayTotals?.videoP50 || 0}
+                    videoP75={displayTotals?.videoP75 || 0}
+                    videoP100={displayTotals?.videoP100 || 0}
+                    videoAvgWatch={displayTotals?.videoAvgWatch || 0}
+                  />
+                </div>
+              </div>
+            </Section>
+
+            {/* ── AUDIENCE SECTION ── */}
+            <Section title="Audience" right={
+              <select className="form-input" style={{ padding: '4px 10px', fontSize: 11, width: 140 }}
+                value={audienceMetric} onChange={e => setAudienceMetric(e.target.value)}>
+                {['impressions','clicks','spend','reach','ctr','cpm','cpc'].map(k => (
+                  <option key={k} value={k}>{k.toUpperCase()}</option>
+                ))}
+              </select>
+            }>
+              {loadingAudience ? (
+                <div style={{ padding: 48, textAlign: 'center' }}><div className="spinner" /></div>
+              ) : !audienceData ? (
+                <div style={{ padding: 32, textAlign: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 12 }}>Audience data unavailable</div>
+              ) : (
+                <>
+                  {/* Row 1: Gender + Age */}
+                  <div style={pg.audienceRow}>
+                    <div className="glass" style={pg.audienceCard}>
+                      <div style={pg.audienceCardTitle}>Gender</div>
+                      <AudienceDonut data={audienceData.gender} labelKey="gender" valueKey={audienceMetric} />
+                    </div>
+                    <div className="glass" style={{ ...pg.audienceCard, flex: 2 }}>
+                      <div style={pg.audienceCardTitle}>Age Group</div>
+                      <AudienceBar data={audienceData.age} labelKey="age" valueKey={audienceMetric} color="#32cd32" />
+                    </div>
+                  </div>
+
+                  {/* Row 2: Platform + Device */}
+                  <div style={pg.audienceRow}>
+                    <div className="glass" style={pg.audienceCard}>
+                      <div style={pg.audienceCardTitle}>Platform</div>
+                      <AudienceBar data={audienceData.platform} labelKey="publisher_platform" valueKey={audienceMetric} color="#1A7FCC" />
+                    </div>
+                    <div className="glass" style={pg.audienceCard}>
+                      <div style={pg.audienceCardTitle}>Device</div>
+                      <AudienceBar data={audienceData.device} labelKey="impression_device" valueKey={audienceMetric} color="#f5a623" />
+                    </div>
+                  </div>
+
+                  {/* Row 3: Region */}
+                  <div className="glass" style={{ padding: '18px 20px', borderRadius: 12 }}>
+                    <div style={pg.audienceCardTitle}>Region (Top 10)</div>
+                    <AudienceBar data={audienceData.region} labelKey="region" valueKey={audienceMetric} horizontal color="#a78bfa" />
+                  </div>
+                </>
+              )}
+            </Section>
           </>
         )}
-        {overview?.cachedAt === undefined && overview?.cards?.[0]?.cachedAt && (
-          <span style={{ fontSize: 11, color: 'rgba(232,245,233,0.3)', marginLeft: 8, alignSelf: 'center' }}>
-            · data as of {new Date(overview.cards[0].cachedAt).toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        )}
       </div>
 
-      {/* Loading state */}
-      {loading ? (
-        <div style={{ padding: 80, textAlign: 'center' }}><div className="spinner" /></div>
-      ) : (
-        <>
-          {/* Client cards grid */}
-          <div style={pg.grid}>
-            {(overview?.cards || []).map(card => (
-              <ClientCard
-                key={card.id}
-                card={card}
-                selected={selectedId === card.id}
-                onClick={() => !card.error && handleCardClick(card.id)}
-              />
-            ))}
-            {overview?.cards?.length === 0 && (
-              <div style={{ gridColumn: '1/-1', textAlign: 'center', color: 'rgba(232,245,233,0.3)', padding: 48 }}>
-                No clients assigned. Ask your admin to assign clients to your account.
-              </div>
-            )}
-          </div>
-
-          {/* Detail panel */}
-          {selectedId && (
-            <div ref={detailRef}>
-              <ClientDetail
-                key={selectedId}
-                clientId={selectedId}
-                rangeParams={rangeParams}
-                onClose={() => setSelectedId(null)}
-              />
-            </div>
-          )}
-        </>
+      {/* Action Widget — only when client is selected */}
+      {selectedId && (
+        <ActionWidget clientId={selectedId} clientCode={selectedClient?.clientCode} />
       )}
     </div>
   );
 }
 
 const pg = {
-  page:     { padding: '32px 36px', maxWidth: 1200 },
-  header:   { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 16 },
-  title:    { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
-  sub:      { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
-  pill:     { fontSize: 11, fontWeight: 700, borderRadius: 10, padding: '4px 10px' },
-  rangeBar: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' },
-  grid:     { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16, marginBottom: 24 },
+  header:          { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 },
+  title:           { fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub:             { fontSize: 12, color: 'var(--text-muted)', marginTop: 3 },
+  rangeBar:        { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' },
+  metricGrid:      { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 },
+  engagementGrid:  { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 },
+  engCard:         { padding: '18px 20px', borderRadius: 12 },
+  engCardTitle:    { fontSize: 11, fontWeight: 700, color: 'rgba(50,205,50,0.6)', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 14 },
+  audienceRow:     { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14, marginBottom: 14 },
+  audienceCard:    { padding: '18px 20px', borderRadius: 12, flex: 1 },
+  audienceCardTitle:{ fontSize: 10, fontWeight: 700, color: 'rgba(50,205,50,0.5)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 12 },
+  confirmBox:      { background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.3)', borderRadius: 10, padding: '16px 20px', marginBottom: 20 },
+  confirmText:     { fontSize: 13, color: 'rgba(232,245,233,0.8)', marginBottom: 8, fontWeight: 600 },
 };

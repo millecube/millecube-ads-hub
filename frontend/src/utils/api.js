@@ -49,12 +49,13 @@ export const schedulesAPI = {
 };
 
 export const monitorAPI = {
-  overview:  (params)           => api.get('/monitor/overview', { params }).then(r => r.data),
-  client:    (id, params)       => api.get(`/monitor/${id}`, { params }).then(r => r.data),
-  diagnose:  (id, body)         => api.post(`/monitor/${id}/diagnose`, body).then(r => r.data),
-  actions:   (id)               => api.get(`/monitor/${id}/actions`).then(r => r.data),
-  addAction: (id, body)         => api.post(`/monitor/${id}/actions`, body).then(r => r.data),
-  updateAction: (actionId, body)=> api.put(`/monitor/actions/${actionId}`, body).then(r => r.data),
+  overview:     (params)            => api.get('/monitor/overview', { params }).then(r => r.data),
+  client:       (id, params)        => api.get(`/monitor/${id}`, { params }).then(r => r.data),
+  audience:     (id, params)        => api.get(`/monitor/${id}/audience`, { params }).then(r => r.data),
+  diagnose:     (id, body)          => api.post(`/monitor/${id}/diagnose`, body).then(r => r.data),
+  actions:      (id)                => api.get(`/monitor/${id}/actions`).then(r => r.data),
+  addAction:    (id, body)          => api.post(`/monitor/${id}/actions`, body).then(r => r.data),
+  updateAction: (actionId, body)    => api.put(`/monitor/actions/${actionId}`, body).then(r => r.data),
 };
 
 export const jobsAPI = {
