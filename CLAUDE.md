@@ -1,42 +1,75 @@
-# millecube-ads-hub
+# Millecube Ads Hub — Claude Code Context
 
-Millecube Digital's internal tool to automate monthly Meta Ads performance reports for clients. Pulls from Meta Graph API and generates branded Word (.docx) reports.
-
-## How to run
-
-```bash
-npm run dev   # starts backend (port 3001) + frontend (port 3000) concurrently
-```
+## What this project is
+Internal Meta Ads report hub for Millecube Digital agency.
+Manages 11 client Meta Ads accounts, generates Word reports, tracks performance.
 
 ## Stack
+- Frontend: React → deployed on Vercel (millecube-ads-hub.vercel.app)
+- Backend: Express + Node.js → deployed on Render (millecube-ads-hub.onrender.com)
+- Database: MongoDB Atlas (via MONGODB_URI on Render)
+- Auth: JWT, roles: admin / member
+- Email: Resend
+- Storage: Google Drive (personal Gmail OAuth)
+- Code: GitHub → github.com/millecube/millecube-ads-hub
+- Deploy: push to main → Vercel + Render auto-deploy
 
-- **Backend:** Node.js/Express — `backend/server.js`, `backend/reportGenerator.js`
-- **Frontend:** React (CRA) — `frontend/src/`
-- **Data:** JSON flat files — `data/clients.json`, `data/schedules.json`, `data/jobs.json`, `data/users.json`
-- **Reports output:** `reports/[CLIENT_CODE]/`
+## Local dev note
+No .env on this machine. Don't test locally.
+Push to GitHub → test on live URLs.
 
-## Key files
+## Current pages
+- /login — public
+- / — Dashboard
+- /clients — Client management
+- /generate — Manual report generation
+- /schedules — Auto schedule manager
+- /history — Job history + downloads
+- /settings — Profile, team members, client assignment
 
-- `backend/server.js` — Express API (clients, reports, schedules, jobs endpoints)
-- `backend/reportGenerator.js` — Word .docx builder (9 sections, Millecube brand)
-- `frontend/src/pages/` — Dashboard, Clients, Generate, Schedules, History, Settings, Login
-- `frontend/src/components/Sidebar.js` — main nav component
-- `frontend/src/assets/` — brand assets (logos as base64)
-- `SKILL-meta-ads-report.md` — full report generation spec (goals, charts, Word rules)
+## Phase 1 — COMPLETED
+Client assignment to staff. Members only see assigned clients.
+Commit: c6cab9e
 
-## Brand colours
+## Next: Phase 2 — Ads Monitor Dashboard
+New page /monitor — live Meta Ads data for all assigned clients.
+Key features:
+- All client cards with health score (green/yellow/red)
+- Per-client metric vs threshold comparison
+- Branch tracking for Viking Fitness (KL, RC, CR)
+- Treemap spend distribution
+- Drill-down table (campaign → adset → ad level)
+- Manual AI diagnosis trigger (Anthropic API)
+- Action board (team marks done/escalate)
 
-| Role | Hex |
-|---|---|
-| Dark green (headers) | `#07503c` |
-| Green accent | `#32cd32` |
-| Light green | `#6bc71f` |
+## Phase 3 — Rule Engine
+Per-client thresholds. Objective types: whatsapp, lead, shopee, engagement.
+Feeds health score into Phase 2.
 
-Always apply these colours for UI or report changes.
+## Phase 4 — Action Board
+Team actions, escalation to Zack via email (Resend).
 
-## Context
+## Phase 5 — AI Diagnosis
+Manual trigger only. Anthropic API. Plain language output.
 
-- Owner: Zack Kho, founder of Millecube Digital (hello@millecube.com), Malaysia
-- Currency: Malaysian Ringgit (RM)
-- Meta Ads agency — Malaysia benchmarks apply
-- When editing `reportGenerator.js`, follow the docx-js rules in `SKILL-meta-ads-report.md`
+## Phase 6 — Google Sheets Sync
+Add Sheets API scope to existing Google OAuth (personal Gmail).
+Client strategy sheets stored in Millecube company Drive, shared to personal Gmail.
+
+## Clients (live, on MongoDB)
+- MJT — Master Jessie Tan
+- VK — Viking Fitness (branches: KL=Kuchai Lama, RC=Razak City, CR=Cheras)
+- MAR — Marssenger
+
+## Key decisions made
+- AI diagnosis: manual trigger only (cost control)
+- Daily 9AM email digest: data only, no AI
+- Supabase: decided against, using existing MongoDB
+- Google OAuth: personal Gmail as bridge account
+- No client login view yet (Phase 2 of future roadmap)
+- Escalation: email to Zack via Resend
+- Branch access: staff sees all branches when assigned to Viking
+
+## Brand
+Millecube Digital — #07503c dark green, #32cd32 green, #6bc71f light green
+Glassmorphism dark theme. Montserrat font.
