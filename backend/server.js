@@ -613,6 +613,21 @@ app.get('/api/clients', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET — return clients visible to current user (must be before /:id)
+// Admin sees all, member sees only assigned
+app.get('/api/clients/assigned', async (req, res) => {
+  try {
+    const clients = await readClients();
+    if (req.user?.role === 'admin') {
+      return res.json(clients.map(c => ({ ...c, _id: undefined, accessToken: c.accessToken ? '••••••••' + c.accessToken.slice(-6) : null })));
+    }
+    const assigned = clients.filter(c =>
+      Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id)
+    );
+    res.json(assigned.map(c => ({ ...c, _id: undefined, accessToken: c.accessToken ? '••••••••' + c.accessToken.slice(-6) : null })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET single client
 app.get('/api/clients/:id', async (req, res) => {
   try {
@@ -821,6 +836,12 @@ app.delete('/api/jobs/:id', async (req, res) => {
 });
 
 // ── Monitor: Helpers ──────────────────────────────────────────────────────────
+
+function extractAction(actions, type) {
+  if (!actions) return 0;
+  const f = (Array.isArray(actions) ? actions : []).find(a => a.action_type === type);
+  return f ? parseFloat(f.value || 0) : 0;
+}
 
 const MONITOR_TTL_MS = 30 * 60 * 1000;
 const BENCH_DEFAULTS = { ctr: 0.8, cpm: 25, cpr: 50, frequency: 3.5 };
