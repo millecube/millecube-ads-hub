@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Treemap, ResponsiveContainer, Tooltip } from 'recharts';
 import { monitorAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
@@ -612,6 +612,11 @@ function ClientCard({ card, onClick, selected }) {
           ))}
         </div>
       )}
+
+      {/* Analyse CTA */}
+      <div style={oc.analyseCta}>
+        <span style={oc.analyseBtn}>{selected ? '▼ Close' : '◎ Analyse & AI Diagnose'}</span>
+      </div>
     </div>
   );
 }
@@ -637,6 +642,8 @@ const oc = {
   branchResults: { color: 'rgba(232,245,233,0.4)' },
   breaches:      { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   breachPill:    { fontSize: 10, color: '#ff4d4d', background: 'rgba(255,77,77,0.1)', border: '1px solid rgba(255,77,77,0.25)', borderRadius: 10, padding: '2px 8px', fontWeight: 700 },
+  analyseCta:    { marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(50,205,50,0.1)', textAlign: 'center' },
+  analyseBtn:    { fontSize: 11, fontWeight: 700, color: '#32cd32', letterSpacing: 0.5, opacity: 0.8 },
 };
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -649,6 +656,7 @@ export default function AdsMonitor() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd,   setCustomEnd]   = useState('');
   const [refreshing,  setRefreshing]  = useState(false);
+  const detailRef = useRef(null);
 
   const rangeParams = range === 'custom' && customStart && customEnd
     ? { dateStart: customStart, dateStop: customEnd }
@@ -670,7 +678,11 @@ export default function AdsMonitor() {
   useEffect(() => { load(); }, [load]);
 
   const handleCardClick = (id) => {
-    setSelectedId(prev => prev === id ? null : id);
+    setSelectedId(prev => {
+      const next = prev === id ? null : id;
+      if (next) setTimeout(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+      return next;
+    });
   };
 
   const greenCount  = overview?.cards?.filter(c => c.health?.score === 'green').length  || 0;
@@ -748,12 +760,14 @@ export default function AdsMonitor() {
 
           {/* Detail panel */}
           {selectedId && (
-            <ClientDetail
-              key={selectedId}
-              clientId={selectedId}
-              rangeParams={rangeParams}
-              onClose={() => setSelectedId(null)}
-            />
+            <div ref={detailRef}>
+              <ClientDetail
+                key={selectedId}
+                clientId={selectedId}
+                rangeParams={rangeParams}
+                onClose={() => setSelectedId(null)}
+              />
+            </div>
           )}
         </>
       )}
