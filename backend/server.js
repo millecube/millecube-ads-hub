@@ -820,6 +820,419 @@ app.delete('/api/jobs/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Monitor: Helpers ──────────────────────────────────────────────────────────
+
+const MONITOR_TTL_MS = 30 * 60 * 1000;
+const BENCH_DEFAULTS = { ctr: 0.8, cpm: 25, cpr: 50, frequency: 3.5 };
+
+function getTodayMYT() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+}
+
+function getMonitorDateRange(range, dateStart, dateStop) {
+  const todayMYT = getTodayMYT();
+  if (dateStart && dateStop) {
+    return { dateStart, dateStop, rangeKey: `custom_${dateStart}_${dateStop}` };
+  }
+  const days = range === '7d' ? 7 : range === '14d' ? 14 : 30;
+  const start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  const dateStartStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+  return { dateStart: dateStartStr, dateStop: todayMYT, rangeKey: range || '30d' };
+}
+
+async function getMonitorCache(clientId, rangeKey) {
+  if (!usingMongo()) return null;
+  try {
+    const db    = await getDb();
+    const entry = await db.collection('monitorCache').findOne({ clientId, rangeKey });
+    if (!entry) return null;
+    if (Date.now() - new Date(entry.fetchedAt).getTime() > MONITOR_TTL_MS) return null;
+    return entry.data;
+  } catch { return null; }
+}
+
+async function setMonitorCache(clientId, rangeKey, data) {
+  if (!usingMongo()) return;
+  try {
+    const db = await getDb();
+    await db.collection('monitorCache').updateOne(
+      { clientId, rangeKey },
+      { $set: { clientId, rangeKey, data, fetchedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+  } catch (err) { console.error('[CACHE] Write failed:', err.message); }
+}
+
+function calcHealthScore(metrics, clientThresholds) {
+  const usingDefaults = !clientThresholds;
+  const t = clientThresholds || BENCH_DEFAULTS;
+  const breaches = [];
+  if (metrics.ctr       !== null && metrics.ctr       <  t.ctr)       breaches.push({ metric: 'CTR',       value: metrics.ctr,       threshold: t.ctr,       direction: 'below' });
+  if (metrics.cpm       !== null && metrics.cpm       >  t.cpm)       breaches.push({ metric: 'CPM',       value: metrics.cpm,       threshold: t.cpm,       direction: 'above' });
+  if (metrics.cpr       !== null && metrics.cpr       >  t.cpr)       breaches.push({ metric: 'CPR',       value: metrics.cpr,       threshold: t.cpr,       direction: 'above' });
+  if (metrics.frequency !== null && metrics.frequency >  t.frequency) breaches.push({ metric: 'Frequency', value: metrics.frequency, threshold: t.frequency, direction: 'above' });
+  return {
+    score: breaches.length === 0 ? 'green' : breaches.length === 1 ? 'yellow' : 'red',
+    breaches, usingDefaults, thresholds: t
+  };
+}
+
+function detectVKBranch(campaignName) {
+  const n = (campaignName || '').toUpperCase();
+  if (n.includes('KL')) return 'KL';
+  if (n.includes('RC')) return 'RC';
+  if (n.includes('CR')) return 'CR';
+  return 'OTHER';
+}
+
+// ── Monitor: Meta API fetchers ────────────────────────────────────────────────
+
+async function fetchCampaignLevel(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'campaign', limit: 500,
+      fields: [
+        'campaign_name','campaign_id','objective','spend','reach','impressions',
+        'clicks','ctr','cpm','cpc','frequency',
+        'actions','cost_per_action_type','date_start','date_stop'
+      ].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchAdsetLevel(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'adset', limit: 500,
+      fields: [
+        'campaign_name','campaign_id','adset_name','adset_id',
+        'spend','reach','impressions','clicks','ctr','cpm','cpc','frequency',
+        'actions','cost_per_action_type'
+      ].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchAdLevel(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'ad', limit: 500,
+      fields: [
+        'campaign_name','campaign_id','adset_name','adset_id','ad_name','ad_id',
+        'spend','reach','impressions','clicks','ctr','cpm','cpc',
+        'actions','cost_per_action_type'
+      ].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchDailyTrend(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'campaign', time_increment: 1, limit: 500,
+      fields: 'campaign_name,spend,impressions,clicks,actions,date_start'
+    }
+  });
+  return res.data.data || [];
+}
+
+// ── Monitor: Data processor ───────────────────────────────────────────────────
+
+function processCampaignSummary(campaigns, client) {
+  const acc = campaigns.reduce((a, c) => {
+    const imp = parseFloat(c.impressions || 0);
+    a.spend        += parseFloat(c.spend || 0);
+    a.reach        += parseFloat(c.reach || 0);
+    a.impressions  += imp;
+    a.clicks       += parseFloat(c.clicks || 0);
+    a.freqWeighted += parseFloat(c.frequency || 0) * imp;
+    a.waConvos     += extractAction(c.actions, 'onsite_conversion.messaging_first_reply');
+    a.leads        += extractAction(c.actions, 'lead');
+    a.engagements  += extractAction(c.actions, 'post_engagement');
+    a.pageLikes    += extractAction(c.actions, 'like');
+    return a;
+  }, { spend:0, reach:0, impressions:0, clicks:0, freqWeighted:0, waConvos:0, leads:0, engagements:0, pageLikes:0 });
+
+  acc.ctr       = acc.impressions > 0 ? acc.clicks / acc.impressions * 100 : 0;
+  acc.cpm       = acc.impressions > 0 ? acc.spend  / acc.impressions * 1000 : 0;
+  acc.cpc       = acc.clicks      > 0 ? acc.spend  / acc.clicks : 0;
+  acc.frequency = acc.impressions > 0 ? acc.freqWeighted / acc.impressions : 0;
+
+  const primaryGoal    = (client.campaignGoals || [])[0]?.goal || 'whatsapp';
+  const primaryResults = primaryGoal === 'leads'           ? acc.leads
+                       : primaryGoal === 'post_engagement' ? acc.engagements
+                       : primaryGoal === 'page_likes'      ? acc.pageLikes
+                       : acc.waConvos;
+  acc.cpr            = primaryResults > 0 ? acc.spend / primaryResults : 0;
+  acc.primaryResults = primaryResults;
+  acc.primaryGoal    = primaryGoal;
+
+  let branches = null;
+  if (client.clientCode === 'VK') {
+    const bMap = {};
+    for (const c of campaigns) {
+      const b = detectVKBranch(c.campaign_name);
+      if (!bMap[b]) bMap[b] = { spend: 0, results: 0, impressions: 0, clicks: 0 };
+      bMap[b].spend       += parseFloat(c.spend || 0);
+      bMap[b].impressions += parseFloat(c.impressions || 0);
+      bMap[b].clicks      += parseFloat(c.clicks || 0);
+      bMap[b].results     += extractAction(c.actions, 'onsite_conversion.messaging_first_reply');
+    }
+    branches = bMap;
+  }
+
+  return { totals: acc, branches, campaignCount: campaigns.length };
+}
+
+// ── GET /api/monitor/overview ─────────────────────────────────────────────────
+app.get('/api/monitor/overview', async (req, res) => {
+  try {
+    const { range, dateStart: ds, dateStop: de } = req.query;
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const todayMYT = getTodayMYT();
+
+    const allClients     = await readClients();
+    const visibleClients = req.user.role === 'admin'
+      ? allClients
+      : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
+
+    const cards = await Promise.all(visibleClients.map(async (client) => {
+      try {
+        let cached = await getMonitorCache(client.id, rangeKey);
+        if (!cached) {
+          const [campaigns, todayCampaigns] = await Promise.all([
+            fetchCampaignLevel(client, dateStart, dateStop),
+            fetchCampaignLevel(client, todayMYT, todayMYT).catch(() => [])
+          ]);
+          const todaySpend = todayCampaigns.reduce((s, c) => s + parseFloat(c.spend || 0), 0);
+          cached = { campaigns, todaySpend, fetchedAt: new Date().toISOString() };
+          await setMonitorCache(client.id, rangeKey, cached);
+        }
+
+        const { totals, branches, campaignCount } = processCampaignSummary(cached.campaigns, client);
+        const health = calcHealthScore(
+          { ctr: totals.ctr, cpm: totals.cpm, cpr: totals.cpr, frequency: totals.frequency },
+          client.thresholds || null
+        );
+
+        return {
+          id: client.id, clientCode: client.clientCode, name: client.name,
+          monthlyBudget: client.monthlyBudget || null,
+          todaySpend: cached.todaySpend || 0,
+          totals, branches, campaignCount, health,
+          dateStart, dateStop, rangeKey, cachedAt: cached.fetchedAt
+        };
+      } catch (err) {
+        logMetaError(err, `Monitor overview ${client.clientCode}`);
+        return {
+          id: client.id, clientCode: client.clientCode, name: client.name,
+          error: err.response?.data?.error?.message || err.message,
+          health: { score: 'red', breaches: [], usingDefaults: true }
+        };
+      }
+    }));
+
+    res.json({ cards, dateStart, dateStop, rangeKey });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/monitor/:clientId ────────────────────────────────────────────────
+app.get('/api/monitor/:clientId', async (req, res) => {
+  try {
+    const { range, dateStart: ds, dateStop: de } = req.query;
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const detailKey = `detail_${rangeKey}`;
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === req.params.clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    if (req.user.role !== 'admin') {
+      if (!Array.isArray(client.assignedUsers) || !client.assignedUsers.includes(req.user.id))
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    let detail = await getMonitorCache(client.id, detailKey);
+    if (!detail) {
+      const [campaigns, adsets, ads, daily] = await Promise.all([
+        fetchCampaignLevel(client, dateStart, dateStop),
+        fetchAdsetLevel(client, dateStart, dateStop),
+        fetchAdLevel(client, dateStart, dateStop),
+        fetchDailyTrend(client, dateStart, dateStop)
+      ]);
+      detail = { campaigns, adsets, ads, daily, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, detailKey, detail);
+    }
+
+    const { totals, branches, campaignCount } = processCampaignSummary(detail.campaigns, client);
+    const health = calcHealthScore(
+      { ctr: totals.ctr, cpm: totals.cpm, cpr: totals.cpr, frequency: totals.frequency },
+      client.thresholds || null
+    );
+
+    res.json({
+      client: {
+        id: client.id, clientCode: client.clientCode, name: client.name,
+        monthlyBudget: client.monthlyBudget || null, thresholds: client.thresholds || null
+      },
+      totals, branches, campaignCount, health,
+      campaigns: detail.campaigns, adsets: detail.adsets,
+      ads: detail.ads, daily: detail.daily,
+      dateStart, dateStop, rangeKey, cachedAt: detail.fetchedAt
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/monitor/:clientId/diagnose ──────────────────────────────────────
+app.post('/api/monitor/:clientId/diagnose', async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: 'AI diagnosis not configured' });
+
+  try {
+    const { range, dateStart: ds, dateStop: de, context } = req.body;
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const detailKey = `detail_${rangeKey}`;
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === req.params.clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    let detail = await getMonitorCache(client.id, detailKey);
+    if (!detail) {
+      const [campaigns, adsets, ads, daily] = await Promise.all([
+        fetchCampaignLevel(client, dateStart, dateStop),
+        fetchAdsetLevel(client, dateStart, dateStop),
+        fetchAdLevel(client, dateStart, dateStop),
+        fetchDailyTrend(client, dateStart, dateStop)
+      ]);
+      detail = { campaigns, adsets, ads, daily, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, detailKey, detail);
+    }
+
+    const { totals }   = processCampaignSummary(detail.campaigns, client);
+    const health       = calcHealthScore(
+      { ctr: totals.ctr, cpm: totals.cpm, cpr: totals.cpr, frequency: totals.frequency },
+      client.thresholds || null
+    );
+    const t            = client.thresholds || BENCH_DEFAULTS;
+    const usingDefaults = !client.thresholds;
+
+    const topCampaigns = [...detail.campaigns]
+      .sort((a, b) => parseFloat(b.spend || 0) - parseFloat(a.spend || 0))
+      .slice(0, 5)
+      .map(c => `- ${c.campaign_name}: RM ${parseFloat(c.spend||0).toFixed(2)} spend, CTR ${parseFloat(c.ctr||0).toFixed(2)}%, CPM RM ${parseFloat(c.cpm||0).toFixed(2)}, Freq ${parseFloat(c.frequency||0).toFixed(2)}`)
+      .join('\n');
+
+    const prompt = `You are a Meta Ads performance analyst for Millecube Digital, a Malaysian digital marketing agency.
+
+Client: ${client.name} (${client.clientCode})
+Period: ${dateStart} to ${dateStop}
+Thresholds: ${usingDefaults ? 'Malaysian benchmarks (defaults — no custom thresholds set)' : 'Custom thresholds configured by admin'}
+
+ACCOUNT METRICS:
+- Total Spend: RM ${totals.spend.toFixed(2)}
+- Reach: ${Math.round(totals.reach).toLocaleString()}
+- Impressions: ${Math.round(totals.impressions).toLocaleString()}
+- CTR: ${totals.ctr.toFixed(2)}% (threshold floor: ${t.ctr}%)
+- CPM: RM ${totals.cpm.toFixed(2)} (threshold cap: RM ${t.cpm})
+- CPC: RM ${totals.cpc.toFixed(2)}
+- CPR (${totals.primaryGoal}): RM ${totals.cpr.toFixed(2)} (threshold cap: RM ${t.cpr})
+- Frequency: ${totals.frequency.toFixed(2)} (threshold cap: ${t.frequency})
+- Primary Results: ${Math.round(totals.primaryResults).toLocaleString()} ${totals.primaryGoal}
+
+HEALTH SCORE: ${health.score.toUpperCase()}
+Breached: ${health.breaches.length === 0 ? 'None' : health.breaches.map(b => `${b.metric} (${b.value.toFixed(2)} vs ${b.threshold} — ${b.direction} threshold)`).join(', ')}
+
+TOP 5 CAMPAIGNS BY SPEND:
+${topCampaigns}
+${context ? `\nACCOUNT MANAGER NOTES:\n${context}` : ''}
+
+Write a concise plain-English diagnosis (3–5 paragraphs) covering:
+1. Overall account health and what is driving the score
+2. Top 1–2 specific issues with data-backed reasoning
+3. Top 2–3 actionable recommendations (specific, not generic)
+4. One thing working well that should be maintained
+
+Use RM for currency. Write for a non-technical account manager. Be direct and specific.`;
+
+    const Anthropic = require('@anthropic-ai/sdk');
+    const anthropic = new Anthropic({ apiKey });
+    const message   = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    res.json({
+      diagnosis: message.content[0].text,
+      health, dateStart, dateStop,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('[DIAGNOSE]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Actions CRUD ──────────────────────────────────────────────────────────────
+
+app.get('/api/monitor/:clientId/actions', async (req, res) => {
+  try {
+    if (!usingMongo()) return res.json([]);
+    const db      = await getDb();
+    const actions = await db.collection('actions')
+      .find({ clientId: req.params.clientId })
+      .sort({ createdAt: -1 }).toArray();
+    res.json(actions.map(a => ({ ...a, _id: undefined })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/monitor/:clientId/actions', async (req, res) => {
+  try {
+    const { clientCode, campaignName, metric, issue, recommendation, severity } = req.body;
+    if (!issue) return res.status(400).json({ error: 'issue is required' });
+    const action = {
+      id: uuidv4(), clientId: req.params.clientId, clientCode,
+      campaignName, metric, issue, recommendation,
+      severity: severity || 'minor', status: 'open',
+      assignedTo: null, comment: '',
+      createdBy: req.user.username,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    };
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('actions').insertOne(action);
+    }
+    res.status(201).json({ ...action, _id: undefined });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/monitor/actions/:actionId', async (req, res) => {
+  try {
+    const updates = { updatedAt: new Date().toISOString() };
+    if (req.body.status     !== undefined) updates.status     = req.body.status;
+    if (req.body.assignedTo !== undefined) updates.assignedTo = req.body.assignedTo;
+    if (req.body.comment    !== undefined) updates.comment    = req.body.comment;
+    if (!usingMongo()) return res.json({ ok: true });
+    const db = await getDb();
+    await db.collection('actions').updateOne({ id: req.params.actionId }, { $set: updates });
+    const updated = await db.collection('actions').findOne({ id: req.params.actionId });
+    res.json({ ...updated, _id: undefined });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n🟢 Millecube Ads Hub Backend running on http://localhost:${PORT}`);

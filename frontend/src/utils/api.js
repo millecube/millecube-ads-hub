@@ -48,6 +48,15 @@ export const schedulesAPI = {
   delete: (id)        => api.delete(`/schedules/${id}`).then(r => r.data)
 };
 
+export const monitorAPI = {
+  overview:  (params)           => api.get('/monitor/overview', { params }).then(r => r.data),
+  client:    (id, params)       => api.get(`/monitor/${id}`, { params }).then(r => r.data),
+  diagnose:  (id, body)         => api.post(`/monitor/${id}/diagnose`, body).then(r => r.data),
+  actions:   (id)               => api.get(`/monitor/${id}/actions`).then(r => r.data),
+  addAction: (id, body)         => api.post(`/monitor/${id}/actions`, body).then(r => r.data),
+  updateAction: (actionId, body)=> api.put(`/monitor/actions/${actionId}`, body).then(r => r.data),
+};
+
 export const jobsAPI = {
   list:   (params) => api.get('/jobs', { params }).then(r => r.data),
   delete: (id)     => api.delete(`/jobs/${id}`).then(r => r.data),

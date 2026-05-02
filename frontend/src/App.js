@@ -6,8 +6,9 @@ import Clients    from './pages/Clients';
 import Generate   from './pages/Generate';
 import Schedules  from './pages/Schedules';
 import History    from './pages/History';
-import Settings   from './pages/Settings';
-import Login      from './pages/Login';
+import Settings    from './pages/Settings';
+import AdsMonitor  from './pages/AdsMonitor';
+import Login       from './pages/Login';
 import { ToastProvider }   from './hooks/useToast';
 import { AuthProvider, useAuth }     from './context/AuthContext';
 import { ThemeProvider }   from './context/ThemeContext';
@@ -72,6 +73,7 @@ export default function App() {
               <Routes>
                 <Route path="/login"      element={<PublicRoute><Login /></PublicRoute>} />
                 <Route path="/"           element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                <Route path="/monitor"    element={<ProtectedRoute><AdsMonitor /></ProtectedRoute>} />
                 <Route path="/clients"    element={<ProtectedRoute><Clients /></ProtectedRoute>} />
                 <Route path="/generate"   element={<ProtectedRoute><Generate /></ProtectedRoute>} />
                 <Route path="/schedules"  element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
