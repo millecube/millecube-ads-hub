@@ -10,6 +10,7 @@ const nav = [
   { to: '/clients',   label: 'Clients',   icon: '◉' },
   { to: '/generate',  label: 'Generate',  icon: '▶' },
   { to: '/schedules', label: 'Schedules', icon: '◷' },
+  { to: '/budget',    label: 'Budget',    icon: '◈' },
   { to: '/history',   label: 'History',   icon: '◫' },
   { to: '/settings',  label: 'Settings',  icon: '⚙' },
 ];

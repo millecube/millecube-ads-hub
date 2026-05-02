@@ -72,6 +72,15 @@ export const authAPI = {
   deleteUser:     (id)   => api.delete(`/auth/users/${id}`).then(r => r.data),
 };
 
+export const budgetAPI = {
+  overview:  ()                        => api.get('/budget').then(r => r.data),
+  getClient: (clientId)                => api.get(`/budget/${clientId}`).then(r => r.data),
+  upsert:    (clientId, month, data)   => api.post(`/budget/${clientId}/${month}`, data).then(r => r.data),
+  confirm:   (clientId, month)         => api.post(`/budget/${clientId}/${month}/confirm`).then(r => r.data),
+  unconfirm: (clientId, month)         => api.post(`/budget/${clientId}/${month}/unconfirm`).then(r => r.data),
+  setEditors:(clientId, userIds)       => api.put(`/clients/${clientId}/budget-editors`, { userIds }).then(r => r.data),
+};
+
 export const backendUrl = (filePath) => {
   const base = process.env.REACT_APP_API_URL || '';
   return `${base}${filePath}`;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { authAPI, clientsAPI } from '../utils/api';
+import { authAPI, clientsAPI, budgetAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
 
 export default function Settings() {
@@ -23,7 +23,8 @@ export default function Settings() {
   const [clients,        setClients]        = useState([]);
   const [expandedUser,   setExpandedUser]   = useState(null); // userId being assigned
   const [savingAssign,   setSavingAssign]   = useState(false);
-  const [assignMap,      setAssignMap]      = useState({});   // { userId: [clientId, ...] }
+  const [assignMap,      setAssignMap]      = useState({});     // { userId: [clientId, ...] }
+  const [budgetEditMap,  setBudgetEditMap]  = useState({});     // { userId: [clientId, ...] }
 
   const isAdmin = user?.role === 'admin';
 
@@ -47,6 +48,16 @@ export default function Settings() {
         });
       });
       setAssignMap(map);
+
+      // Build budgetEditMap: { userId: [clientId, ...] }
+      const bmap = {};
+      users.forEach(u => { bmap[u.id] = []; });
+      allClients.forEach(c => {
+        (c.budgetEditors || []).forEach(uid => {
+          if (bmap[uid]) bmap[uid].push(c.id);
+        });
+      });
+      setBudgetEditMap(bmap);
     } catch (err) {
       console.error('loadTeam error', err);
     } finally {
@@ -109,6 +120,25 @@ export default function Settings() {
 
   const toggleClientAssign = (userId, clientId) => {
     setAssignMap(prev => {
+      const current   = prev[userId] || [];
+      const willHave  = !current.includes(clientId);
+      // If removing, also clear budget edit permission
+      if (!willHave) {
+        setBudgetEditMap(bprev => ({
+          ...bprev,
+          [userId]: (bprev[userId] || []).filter(id => id !== clientId)
+        }));
+      }
+      const updated = willHave
+        ? [...current, clientId]
+        : current.filter(id => id !== clientId);
+      return { ...prev, [userId]: updated };
+    });
+  };
+
+  const toggleBudgetEdit = (userId, clientId, e) => {
+    e.stopPropagation();
+    setBudgetEditMap(prev => {
       const current = prev[userId] || [];
       const updated  = current.includes(clientId)
         ? current.filter(id => id !== clientId)
@@ -120,18 +150,32 @@ export default function Settings() {
   const saveAssignment = async (userId) => {
     setSavingAssign(true);
     try {
-      const userClientIds = assignMap[userId] || [];
-      // For each client, update its assignedUsers list
+      const userClientIds    = assignMap[userId]     || [];
+      const userBudgetEditIds = budgetEditMap[userId] || [];
+
       await Promise.all(
-        clients.map(c => {
+        clients.map(async (c) => {
+          // Update assignedUsers
           const current    = c.assignedUsers || [];
           const shouldHave = userClientIds.includes(c.id);
           const hasNow     = current.includes(userId);
-          if (shouldHave === hasNow) return Promise.resolve(); // no change
-          const updated = shouldHave
-            ? [...current, userId]
-            : current.filter(id => id !== userId);
-          return clientsAPI.assignClient(c.id, updated);
+          if (shouldHave !== hasNow) {
+            const updated = shouldHave
+              ? [...current, userId]
+              : current.filter(id => id !== userId);
+            await clientsAPI.assignClient(c.id, updated);
+          }
+
+          // Update budgetEditors — rebuild the full array for this client
+          const currentEditors = c.budgetEditors || [];
+          const shouldEdit     = userBudgetEditIds.includes(c.id);
+          const editsNow       = currentEditors.includes(userId);
+          if (shouldEdit !== editsNow) {
+            const updatedEditors = shouldEdit
+              ? [...currentEditors, userId]
+              : currentEditors.filter(id => id !== userId);
+            await budgetAPI.setEditors(c.id, updatedEditors);
+          }
         })
       );
       setExpandedUser(null);
@@ -326,26 +370,38 @@ export default function Settings() {
                         ) : (
                           <div style={as.clientGrid}>
                             {clients.map(c => {
-                              const assigned = (assignMap[u.id] || []).includes(c.id);
+                              const assigned   = (assignMap[u.id]     || []).includes(c.id);
+                              const canBudget  = (budgetEditMap[u.id] || []).includes(c.id);
                               return (
-                                <div
-                                  key={c.id}
-                                  style={{
-                                    ...as.clientChip,
-                                    ...(assigned ? as.clientChipOn : {})
-                                  }}
-                                  onClick={() => toggleClientAssign(u.id, c.id)}
-                                >
-                                  <div style={{
-                                    ...as.chipCheck,
-                                    ...(assigned ? as.chipCheckOn : {})
-                                  }}>
-                                    {assigned && '✓'}
+                                <div key={c.id} style={as.clientChipWrap}>
+                                  <div
+                                    style={{
+                                      ...as.clientChip,
+                                      ...(assigned ? as.clientChipOn : {}),
+                                      ...(assigned ? { borderRadius: '8px 8px 0 0', borderBottom: 'none' } : {})
+                                    }}
+                                    onClick={() => toggleClientAssign(u.id, c.id)}
+                                  >
+                                    <div style={{
+                                      ...as.chipCheck,
+                                      ...(assigned ? as.chipCheckOn : {})
+                                    }}>
+                                      {assigned && '✓'}
+                                    </div>
+                                    <div>
+                                      <div style={as.chipCode}>{c.clientCode}</div>
+                                      <div style={as.chipName}>{c.name}</div>
+                                    </div>
                                   </div>
-                                  <div>
-                                    <div style={as.chipCode}>{c.clientCode}</div>
-                                    <div style={as.chipName}>{c.name}</div>
-                                  </div>
+                                  {/* Budget edit sub-toggle — only shown when assigned */}
+                                  {assigned && (
+                                    <label style={as.budgetToggle} onClick={e => toggleBudgetEdit(u.id, c.id, e)}>
+                                      <div style={{ ...as.chipCheck, width: 14, height: 14, fontSize: 9, ...(canBudget ? as.chipCheckOn : {}) }}>
+                                        {canBudget && '✓'}
+                                      </div>
+                                      <span style={as.budgetLabel}>💰 Can edit budget</span>
+                                    </label>
+                                  )}
                                 </div>
                               );
                             })}
@@ -490,5 +546,17 @@ const as = {
   panelActions: {
     display: 'flex', justifyContent: 'flex-end',
     gap: 10, marginTop: 4
-  }
+  },
+  clientChipWrap: { display: 'flex', flexDirection: 'column', gap: 0 },
+  budgetToggle: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '5px 10px 6px 10px',
+    background: 'rgba(50,205,50,0.04)',
+    borderLeft: '1px solid rgba(50,205,50,0.15)',
+    borderRight: '1px solid rgba(50,205,50,0.15)',
+    borderBottom: '1px solid rgba(50,205,50,0.15)',
+    borderRadius: '0 0 8px 8px',
+    cursor: 'pointer',
+  },
+  budgetLabel: { fontSize: 10, color: 'rgba(232,245,233,0.5)', userSelect: 'none' },
 };

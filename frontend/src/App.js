@@ -7,8 +7,10 @@ import Generate   from './pages/Generate';
 import Schedules  from './pages/Schedules';
 import History    from './pages/History';
 import Settings    from './pages/Settings';
-import AdsMonitor  from './pages/AdsMonitor';
-import Login       from './pages/Login';
+import AdsMonitor    from './pages/AdsMonitor';
+import BudgetManager from './pages/BudgetManager';
+import Login         from './pages/Login';
+import Header        from './components/Header';
 import { ToastProvider }   from './hooks/useToast';
 import { AuthProvider, useAuth }     from './context/AuthContext';
 import { ThemeProvider }   from './context/ThemeContext';
@@ -39,6 +41,7 @@ function Layout({ children }) {
       }} className="main-content">
         {/* Mobile hamburger */}
         <button onClick={openMobile} className="hamburger" aria-label="Open menu">☰</button>
+        <Header />
         {children}
       </main>
     </div>
@@ -77,6 +80,7 @@ export default function App() {
                 <Route path="/clients"    element={<ProtectedRoute><Clients /></ProtectedRoute>} />
                 <Route path="/generate"   element={<ProtectedRoute><Generate /></ProtectedRoute>} />
                 <Route path="/schedules"  element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
+                <Route path="/budget"     element={<ProtectedRoute><BudgetManager /></ProtectedRoute>} />
                 <Route path="/history"    element={<ProtectedRoute><History /></ProtectedRoute>} />
                 <Route path="/settings"   element={<ProtectedRoute><Settings /></ProtectedRoute>} />
               </Routes>

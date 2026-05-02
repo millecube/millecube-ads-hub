@@ -708,6 +708,21 @@ app.put('/api/clients/:id/assign', requireAdmin, async (req, res) => {
   }
 });
 
+// PUT — set budgetEditors for a client (admin only)
+app.put('/api/clients/:id/budget-editors', requireAdmin, async (req, res) => {
+  const { userIds } = req.body;
+  if (!Array.isArray(userIds)) return res.status(400).json({ error: 'userIds must be an array' });
+  try {
+    const clients = await readClients();
+    const idx = clients.findIndex(c => c.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Client not found' });
+    clients[idx].budgetEditors = userIds;
+    clients[idx].updatedAt = new Date().toISOString();
+    await writeClients(clients);
+    res.json({ ok: true, budgetEditors: userIds });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET — return clients visible to current user
 // Admin sees all, member sees only assigned
 app.get('/api/clients/assigned', async (req, res) => {
@@ -1253,6 +1268,292 @@ app.put('/api/monitor/actions/:actionId', async (req, res) => {
     res.json({ ...updated, _id: undefined });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ── Budget: Helpers ───────────────────────────────────────────────────────────
+
+function getCurrentMonthStr() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getBudgetMonths() {
+  const now = new Date();
+  const months = [];
+  for (let i = -2; i <= 2; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+  return months;
+}
+
+function budgetMonthLabel(yyyyMM) {
+  const [y, m] = yyyyMM.split('-');
+  return new Date(parseInt(y), parseInt(m) - 1, 1)
+    .toLocaleString('en-MY', { month: 'long', year: 'numeric' });
+}
+
+async function getBudgetDoc(clientId, month) {
+  if (!usingMongo()) return null;
+  const db  = await getDb();
+  const doc = await db.collection('budgets').findOne({ clientId, month });
+  return doc ? { ...doc, _id: undefined } : null;
+}
+
+async function saveBudgetDoc(doc) {
+  if (!usingMongo()) return doc;
+  const db = await getDb();
+  const { _id, ...clean } = doc;
+  await db.collection('budgets').replaceOne(
+    { clientId: clean.clientId, month: clean.month },
+    clean,
+    { upsert: true }
+  );
+  return clean;
+}
+
+// ── Budget: Routes ────────────────────────────────────────────────────────────
+
+// GET /api/budget — all visible clients + budgets for 5-month window
+app.get('/api/budget', async (req, res) => {
+  try {
+    const allClients     = await readClients();
+    const visibleClients = req.user.role === 'admin'
+      ? allClients
+      : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
+
+    const months       = getBudgetMonths();
+    const currentMonth = getCurrentMonthStr();
+
+    const clients = await Promise.all(visibleClients.map(async (client) => {
+      let budgetMap = {};
+      if (usingMongo()) {
+        const db   = await getDb();
+        const docs = await db.collection('budgets')
+          .find({ clientId: client.id, month: { $in: months } }).toArray();
+        docs.forEach(d => { budgetMap[d.month] = { ...d, _id: undefined }; });
+      }
+      return {
+        id:            client.id,
+        clientCode:    client.clientCode,
+        name:          client.name,
+        budgetEditors: client.budgetEditors || [],
+        months:        months.map(m => ({ month: m, budget: budgetMap[m] || null }))
+      };
+    }));
+
+    res.json({ clients, months, currentMonth });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/budget/:clientId — full budget history for one client
+app.get('/api/budget/:clientId', async (req, res) => {
+  try {
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === req.params.clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    if (req.user.role !== 'admin') {
+      if (!Array.isArray(client.assignedUsers) || !client.assignedUsers.includes(req.user.id))
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (!usingMongo()) return res.json({
+      client:  { id: client.id, clientCode: client.clientCode, name: client.name },
+      budgets: []
+    });
+
+    const db      = await getDb();
+    const budgets = await db.collection('budgets')
+      .find({ clientId: client.id }).sort({ month: -1 }).toArray();
+
+    res.json({
+      client:  { id: client.id, clientCode: client.clientCode, name: client.name },
+      budgets: budgets.map(b => ({ ...b, _id: undefined }))
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/budget/:clientId/:month/confirm — admin only
+app.post('/api/budget/:clientId/:month/confirm', requireAdmin, async (req, res) => {
+  try {
+    const { clientId, month } = req.params;
+    if (!usingMongo()) return res.status(503).json({ error: 'MongoDB required' });
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const existing = await getBudgetDoc(clientId, month);
+    if (!existing) return res.status(404).json({ error: 'No budget set for this month' });
+    if (existing.confirmed) return res.json(existing);
+
+    const now     = new Date().toISOString();
+    const updated = {
+      ...existing,
+      confirmed: true, confirmedBy: req.user.username, confirmedAt: now,
+      updatedAt: now,
+      log: [...(existing.log || []), {
+        action: 'confirmed', fromAmount: null, toAmount: existing.amount,
+        by: req.user.username, at: now, note: req.body.note || null
+      }]
+    };
+    await saveBudgetDoc(updated);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/budget/:clientId/:month/unconfirm — admin only
+app.post('/api/budget/:clientId/:month/unconfirm', requireAdmin, async (req, res) => {
+  try {
+    const { clientId, month } = req.params;
+    if (!usingMongo()) return res.status(503).json({ error: 'MongoDB required' });
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const existing = await getBudgetDoc(clientId, month);
+    if (!existing) return res.status(404).json({ error: 'No budget set for this month' });
+
+    const now     = new Date().toISOString();
+    const updated = {
+      ...existing,
+      confirmed: false, confirmedBy: null, confirmedAt: null,
+      updatedAt: now,
+      log: [...(existing.log || []), {
+        action: 'unconfirmed', fromAmount: null, toAmount: existing.amount,
+        by: req.user.username, at: now, note: req.body.note || null
+      }]
+    };
+    await saveBudgetDoc(updated);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/budget/:clientId/:month — create or update
+app.post('/api/budget/:clientId/:month', async (req, res) => {
+  try {
+    const { clientId, month } = req.params;
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month must be YYYY-MM' });
+    if (!usingMongo()) return res.status(503).json({ error: 'MongoDB required' });
+
+    const allClients = await readClients();
+    const client     = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    if (req.user.role !== 'admin') {
+      const editors = Array.isArray(client.budgetEditors) ? client.budgetEditors : [];
+      if (!editors.includes(req.user.id))
+        return res.status(403).json({ error: 'You do not have permission to edit this budget' });
+    }
+
+    const { amount, note } = req.body;
+    if (amount === undefined || isNaN(parseFloat(amount)))
+      return res.status(400).json({ error: 'amount is required and must be a number' });
+
+    const now      = new Date().toISOString();
+    const existing = await getBudgetDoc(clientId, month);
+
+    if (!existing) {
+      const doc = {
+        id: uuidv4(), clientId, clientCode: client.clientCode, month,
+        amount: parseFloat(amount),
+        confirmed: false, confirmedBy: null, confirmedAt: null,
+        createdBy: req.user.username, createdAt: now, updatedAt: now,
+        log: [{ action: 'created', fromAmount: null, toAmount: parseFloat(amount), by: req.user.username, at: now, note: note || null }]
+      };
+      await saveBudgetDoc(doc);
+      return res.status(201).json(doc);
+    }
+
+    const amountChanged = parseFloat(amount) !== existing.amount;
+    const updated = {
+      ...existing,
+      amount: parseFloat(amount),
+      updatedAt: now,
+      ...(amountChanged ? { confirmed: false, confirmedBy: null, confirmedAt: null } : {}),
+      log: [...(existing.log || []), {
+        action: 'updated', fromAmount: existing.amount, toAmount: parseFloat(amount),
+        by: req.user.username, at: now, note: note || null
+      }]
+    };
+    await saveBudgetDoc(updated);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Budget: End-of-month reminder cron ───────────────────────────────────────
+// Fires 9AM MYT on days 28–31; guard inside confirms it is the actual last day
+cron.schedule('0 9 28-31 * *', async () => {
+  const myt     = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const lastDay = new Date(myt.getFullYear(), myt.getMonth() + 1, 0).getDate();
+  if (myt.getDate() !== lastDay) return;
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) { console.log('[BUDGET CRON] No RESEND_API_KEY — skipping'); return; }
+
+  try {
+    const allClients   = await readClients();
+    const currentMonth = getCurrentMonthStr();
+    const nextD        = new Date(myt.getFullYear(), myt.getMonth() + 1, 1);
+    const nextMonth    = `${nextD.getFullYear()}-${String(nextD.getMonth() + 1).padStart(2, '0')}`;
+
+    const pending = [];
+    for (const client of allClients) {
+      for (const month of [currentMonth, nextMonth]) {
+        const budget = await getBudgetDoc(client.id, month);
+        if (!budget || !budget.confirmed) {
+          pending.push({
+            name: client.name, code: client.clientCode, month,
+            amount: budget ? budget.amount : null
+          });
+        }
+      }
+    }
+    if (pending.length === 0) { console.log('[BUDGET CRON] All budgets confirmed — no email'); return; }
+
+    const rows = pending.map(r => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee">${r.code} — ${r.name}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee">${r.month}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee">${r.amount !== null ? `RM ${parseFloat(r.amount).toLocaleString('en-MY', { minimumFractionDigits: 2 })}` : 'Not set'}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #eee;color:${r.amount !== null ? '#cc8800' : '#cc3333'}">${r.amount !== null ? '⚠ Set, unconfirmed' : '— Not set'}</td>
+      </tr>`).join('');
+
+    const subject = `⚠️ Millecube Ads Hub — Budget confirmation needed for ${budgetMonthLabel(nextMonth)}`;
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:640px;color:#222">
+        <div style="background:#07503c;padding:24px 32px;border-radius:8px 8px 0 0">
+          <h1 style="color:#32cd32;margin:0;font-size:22px">Millecube Ads Hub</h1>
+          <p style="color:#aaa;margin:6px 0 0">Budget Confirmation Reminder</p>
+        </div>
+        <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+          <h2 style="color:#cc3333;margin-top:0">⚠️ Budgets pending confirmation</h2>
+          <p style="color:#555">Please confirm the following client budgets before month-end:</p>
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <thead><tr style="background:#f5f5f5">
+              <th style="padding:8px 12px;text-align:left">Client</th>
+              <th style="padding:8px 12px;text-align:left">Month</th>
+              <th style="padding:8px 12px;text-align:left">Amount</th>
+              <th style="padding:8px 12px;text-align:left">Status</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p style="margin-top:24px">
+            <a href="https://millecube-ads-hub.vercel.app/budget" style="background:#07503c;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Open Budget Manager</a>
+          </p>
+          <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital · Automated Budget Reminder · Do not reply</p>
+        </div>
+      </div>`;
+
+    const resend = new Resend(apiKey);
+    const to     = process.env.EMAIL_TO   || 'hello@millecube.com';
+    const from   = process.env.EMAIL_FROM || 'Millecube Ads Hub <onboarding@resend.dev>';
+    const { data, error } = await resend.emails.send({ from, to, subject, html });
+    if (error) console.error('[BUDGET CRON] Email failed:', JSON.stringify(error));
+    else console.log(`[BUDGET CRON] Sent — ${pending.length} pending — id: ${data.id}`);
+  } catch (err) { console.error('[BUDGET CRON] Error:', err.message); }
+}, { timezone: 'Asia/Kuala_Lumpur' });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
