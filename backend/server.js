@@ -672,6 +672,44 @@ app.delete('/api/clients/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Client Assignment ─────────────────────────────────────────────────────────
+
+// PUT — assign/unassign members to a client (admin only)
+app.put('/api/clients/:id/assign', requireAdmin, async (req, res) => {
+  const { userIds } = req.body;
+  if (!Array.isArray(userIds)) {
+    return res.status(400).json({ error: 'userIds must be an array' });
+  }
+  try {
+    const clients = await readClients();
+    const idx = clients.findIndex(c => c.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Client not found' });
+    clients[idx].assignedUsers = userIds;
+    clients[idx].updatedAt = new Date().toISOString();
+    await writeClients(clients);
+    res.json(clients[idx]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET — return clients visible to current user
+// Admin sees all, member sees only assigned
+app.get('/api/clients/assigned', async (req, res) => {
+  try {
+    const clients = await readClients();
+    if (req.user?.role === 'admin') {
+      return res.json(clients);
+    }
+    const assigned = clients.filter(c =>
+      Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id)
+    );
+    res.json(assigned);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST — verify Meta API credentials
 app.post('/api/clients/:id/verify', async (req, res) => {
   try {

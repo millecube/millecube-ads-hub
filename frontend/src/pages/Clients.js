@@ -207,7 +207,7 @@ export default function Clients() {
   const [loading, setLoading] = useState(true);
   const [modal,   setModal]   = useState(null); // null | 'new' | clientObj
 
-  const load = () => clientsAPI.list().then(setClients).finally(() => setLoading(false));
+  const load = () => clientsAPI.getAssigned().then(setClients).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
   const handleDelete = async (id, name) => {

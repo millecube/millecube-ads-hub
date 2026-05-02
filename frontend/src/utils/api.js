@@ -32,7 +32,9 @@ export const clientsAPI = {
   create: (data)      => api.post('/clients', data).then(r => r.data),
   update: (id, data)  => api.put(`/clients/${id}`, data).then(r => r.data),
   delete: (id)        => api.delete(`/clients/${id}`).then(r => r.data),
-  verify: (id)        => api.post(`/clients/${id}/verify`).then(r => r.data)
+  verify:        (id)          => api.post(`/clients/${id}/verify`).then(r => r.data),
+  assignClient:  (id, userIds) => api.put(`/clients/${id}/assign`, { userIds }).then(r => r.data),
+  getAssigned:   ()            => api.get('/clients/assigned').then(r => r.data),
 };
 
 export const reportsAPI = {

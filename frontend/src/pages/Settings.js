@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { authAPI } from '../utils/api';
+import { authAPI, clientsAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
 
 export default function Settings() {
@@ -20,15 +20,38 @@ export default function Settings() {
   const [showAddUser, setShowAddUser] = useState(false);
   const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'member' });
   const [addingUser, setAddingUser] = useState(false);
+  const [clients,        setClients]        = useState([]);
+  const [expandedUser,   setExpandedUser]   = useState(null); // userId being assigned
+  const [savingAssign,   setSavingAssign]   = useState(false);
+  const [assignMap,      setAssignMap]      = useState({});   // { userId: [clientId, ...] }
 
   const isAdmin = user?.role === 'admin';
 
   const loadTeam = useCallback(async () => {
     if (!isAdmin) return;
     setLoadingTeam(true);
-    try { setTeamUsers(await authAPI.listUsers()); }
-    catch { toast('Failed to load team users.', 'error'); }
-    finally { setLoadingTeam(false); }
+    try {
+      const [users, allClients] = await Promise.all([
+        authAPI.listUsers(),
+        clientsAPI.list()
+      ]);
+      setTeamUsers(users);
+      setClients(allClients);
+
+      // Build assignMap: { userId: [clientId, ...] }
+      const map = {};
+      users.forEach(u => { map[u.id] = []; });
+      allClients.forEach(c => {
+        (c.assignedUsers || []).forEach(uid => {
+          if (map[uid]) map[uid].push(c.id);
+        });
+      });
+      setAssignMap(map);
+    } catch (err) {
+      console.error('loadTeam error', err);
+    } finally {
+      setLoadingTeam(false);
+    }
   }, [isAdmin]);
 
   useEffect(() => { loadTeam(); }, [loadTeam]);
@@ -81,6 +104,42 @@ export default function Settings() {
       loadTeam();
     } catch (err) {
       toast(err.response?.data?.error || 'Failed to remove user.', 'error');
+    }
+  };
+
+  const toggleClientAssign = (userId, clientId) => {
+    setAssignMap(prev => {
+      const current = prev[userId] || [];
+      const updated  = current.includes(clientId)
+        ? current.filter(id => id !== clientId)
+        : [...current, clientId];
+      return { ...prev, [userId]: updated };
+    });
+  };
+
+  const saveAssignment = async (userId) => {
+    setSavingAssign(true);
+    try {
+      const userClientIds = assignMap[userId] || [];
+      // For each client, update its assignedUsers list
+      await Promise.all(
+        clients.map(c => {
+          const current    = c.assignedUsers || [];
+          const shouldHave = userClientIds.includes(c.id);
+          const hasNow     = current.includes(userId);
+          if (shouldHave === hasNow) return Promise.resolve(); // no change
+          const updated = shouldHave
+            ? [...current, userId]
+            : current.filter(id => id !== userId);
+          return clientsAPI.assignClient(c.id, updated);
+        })
+      );
+      setExpandedUser(null);
+      await loadTeam();
+    } catch (err) {
+      console.error('saveAssignment error', err);
+    } finally {
+      setSavingAssign(false);
     }
   };
 
@@ -195,17 +254,124 @@ export default function Settings() {
             ) : (
               <div style={s.userList}>
                 {teamUsers.map(u => (
-                  <div key={u.id} style={s.userRow}>
-                    <div style={s.userAvatar}>{u.username[0].toUpperCase()}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={s.userName}>{u.username}</div>
-                      <div style={s.userMeta}>{u.email || '—'} · <span style={{ color: u.role === 'admin' ? 'var(--accent)' : 'var(--text-muted)' }}>{u.role}</span></div>
+                  <div key={u.id}>
+                    {/* Existing user row */}
+                    <div style={s.memberRow}>
+                      <div>
+                        <div style={s.memberName}>{u.username}</div>
+                        <div style={s.memberEmail}>{u.email}</div>
+                        <span style={{
+                          ...s.roleBadge,
+                          background: u.role === 'admin'
+                            ? 'rgba(50,205,50,0.15)' : 'rgba(255,255,255,0.08)',
+                          color: u.role === 'admin' ? '#32cd32' : 'rgba(232,245,233,0.5)'
+                        }}>
+                          {u.role}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        {/* Assign Clients button — only for members, admin only */}
+                        {isAdmin && u.role === 'member' && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setExpandedUser(
+                              expandedUser === u.id ? null : u.id
+                            )}
+                            style={{
+                              borderColor: expandedUser === u.id
+                                ? 'rgba(50,205,50,0.5)' : undefined,
+                              color: expandedUser === u.id ? '#32cd32' : undefined
+                            }}
+                          >
+                            {expandedUser === u.id ? '▲ Close' : '◉ Assign Clients'}
+                            <span style={{
+                              marginLeft: 6,
+                              background: 'rgba(50,205,50,0.15)',
+                              color: '#32cd32',
+                              borderRadius: 10,
+                              padding: '1px 7px',
+                              fontSize: 11,
+                              fontWeight: 700
+                            }}>
+                              {(assignMap[u.id] || []).length}
+                            </span>
+                          </button>
+                        )}
+                        {/* Delete button — can't delete yourself */}
+                        {u.username !== user?.username && (
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => handleDeleteUser(u.id, u.username)}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    {u.username !== user?.username && (
-                      <button onClick={() => handleDeleteUser(u.id, u.username)} style={s.deleteBtn} title="Remove user">✕</button>
-                    )}
-                    {u.username === user?.username && (
-                      <span style={s.youBadge}>You</span>
+
+                    {/* Expandable client assignment panel */}
+                    {expandedUser === u.id && (
+                      <div style={as.panel}>
+                        <div style={as.panelTitle}>
+                          Assign clients to <strong>{u.username}</strong>
+                        </div>
+                        <div style={as.panelSub}>
+                          This member will only see assigned clients in the dashboard.
+                        </div>
+
+                        {clients.length === 0 ? (
+                          <div style={as.noClients}>
+                            No clients onboarded yet.
+                          </div>
+                        ) : (
+                          <div style={as.clientGrid}>
+                            {clients.map(c => {
+                              const assigned = (assignMap[u.id] || []).includes(c.id);
+                              return (
+                                <div
+                                  key={c.id}
+                                  style={{
+                                    ...as.clientChip,
+                                    ...(assigned ? as.clientChipOn : {})
+                                  }}
+                                  onClick={() => toggleClientAssign(u.id, c.id)}
+                                >
+                                  <div style={{
+                                    ...as.chipCheck,
+                                    ...(assigned ? as.chipCheckOn : {})
+                                  }}>
+                                    {assigned && '✓'}
+                                  </div>
+                                  <div>
+                                    <div style={as.chipCode}>{c.clientCode}</div>
+                                    <div style={as.chipName}>{c.name}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div style={as.panelActions}>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setExpandedUser(null)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => saveAssignment(u.id)}
+                            disabled={savingAssign}
+                          >
+                            {savingAssign
+                              ? <><div className="spinner"
+                                  style={{ width: 12, height: 12 }} /> Saving…</>
+                              : 'Save Assignment'
+                            }
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -256,4 +422,73 @@ const s = {
   userMeta:    { fontSize: 11, color: 'var(--text-muted)', marginTop: 2 },
   deleteBtn:   { background: 'none', border: '1px solid rgba(220,50,50,0.3)', color: '#e55', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0 },
   youBadge:    { fontSize: 10, fontWeight: 700, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 6, padding: '2px 6px', flexShrink: 0 },
+  memberRow:   { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(50,205,50,0.03)' },
+  memberName:  { fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 },
+  memberEmail: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 },
+  roleBadge:   { fontSize: 10, fontWeight: 700, borderRadius: 6, padding: '2px 8px', display: 'inline-block' },
+};
+
+const as = {
+  panel: {
+    margin: '0 0 12px 0',
+    padding: '18px 20px',
+    background: 'rgba(50,205,50,0.04)',
+    border: '1px solid rgba(50,205,50,0.15)',
+    borderRadius: 10,
+    borderTop: 'none',
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+  },
+  panelTitle: {
+    fontSize: 13, fontWeight: 700,
+    color: '#e8f5e9', marginBottom: 4
+  },
+  panelSub: {
+    fontSize: 12, color: 'rgba(232,245,233,0.4)',
+    marginBottom: 16
+  },
+  noClients: {
+    fontSize: 13, color: 'rgba(232,245,233,0.3)',
+    padding: '12px 0'
+  },
+  clientGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: 10, marginBottom: 18
+  },
+  clientChip: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+    border: '1px solid rgba(255,255,255,0.08)',
+    background: 'rgba(0,0,0,0.2)',
+    transition: 'all 0.15s'
+  },
+  clientChipOn: {
+    border: '1px solid rgba(50,205,50,0.4)',
+    background: 'rgba(50,205,50,0.1)',
+  },
+  chipCheck: {
+    width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+    border: '1.5px solid rgba(232,245,233,0.2)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 10, fontWeight: 700, color: '#051c14',
+    transition: 'all 0.15s'
+  },
+  chipCheckOn: {
+    background: '#32cd32',
+    border: '1.5px solid #32cd32'
+  },
+  chipCode: {
+    fontSize: 12, fontWeight: 800,
+    color: '#32cd32', letterSpacing: 1
+  },
+  chipName: {
+    fontSize: 11,
+    color: 'rgba(232,245,233,0.5)',
+    marginTop: 1
+  },
+  panelActions: {
+    display: 'flex', justifyContent: 'flex-end',
+    gap: 10, marginTop: 4
+  }
 };
