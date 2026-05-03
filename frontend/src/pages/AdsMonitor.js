@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
-  ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  ComposedChart, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { monitorAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
@@ -83,7 +83,7 @@ const RANGES = [
   { value: 'custom',     label: 'Custom'       },
 ];
 
-const TOOLTIP_STYLE = { background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 };
+const TOOLTIP_STYLE = { background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11, color: '#e8f5e9' };
 
 // ── Change Badge ──────────────────────────────────────────────────────────────
 function ChangeBadge({ curr, prev, higherBetter }) {
@@ -261,9 +261,10 @@ function PostEngagementBar({ reactions, comments, shares, saves, postEngagement 
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" horizontal={false} />
             <XAxis type="number" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
             <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'rgba(232,245,233,0.55)' }} tickLine={false} width={62} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, n) => [fmtNum(v), n]} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, _n, props) => [fmtNum(v), props.payload?.name || 'Count']} />
             <Bar dataKey="value" radius={[0, 3, 3, 0]}>
               {data.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
+              <LabelList dataKey="value" position="right" formatter={fmtNum} style={{ fontSize: 10, fill: 'rgba(232,245,233,0.6)', fontWeight: 600 }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -276,31 +277,35 @@ function PostEngagementBar({ reactions, comments, shares, saves, postEngagement 
   );
 }
 
-// ── Video Milestone Boxes ─────────────────────────────────────────────────────
-function VideoMilestoneBoxes({ videoP25, videoP50, videoP75, videoP100, videoAvgWatch }) {
+// ── Video Retention Funnel ────────────────────────────────────────────────────
+function VideoRetentionFunnel({ videoP25, videoP50, videoP75, videoP100, videoAvgWatch }) {
   const steps = [
     { label: '25% Plays',  value: videoP25,  color: CHART_COLORS[0] },
     { label: '50% Plays',  value: videoP50,  color: CHART_COLORS[1] },
     { label: '75% Plays',  value: videoP75,  color: CHART_COLORS[2] },
     { label: '100% Plays', value: videoP100, color: CHART_COLORS[3] },
   ];
+  const max = Math.max(videoP25, 1);
   return (
-    <div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        {steps.map((s, i) => {
-          const prev = i > 0 ? steps[i - 1].value : null;
-          const drop = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(1) : null;
-          return (
-            <div key={s.label} style={{ padding: '10px 12px', background: 'rgba(0,0,0,0.2)', borderRadius: 8, border: `1px solid ${s.color}33` }}>
-              <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>{s.label}</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: s.color, lineHeight: 1.1 }}>{fmtNum(s.value)}</div>
-              {drop && <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.3)', marginTop: 3 }}>↓ {drop}% retention</div>}
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      {steps.map((s, i) => {
+        const prev      = i > 0 ? steps[i - 1].value : null;
+        const retention = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(1) : null;
+        const width     = Math.max((s.value / max) * 100, 14);
+        return (
+          <React.Fragment key={s.label}>
+            {retention && (
+              <div style={{ fontSize: 10, color: 'rgba(232,245,233,0.35)', letterSpacing: 0.3 }}>↓ {retention}% retention</div>
+            )}
+            <div style={{ width: `${width}%`, minWidth: 80, padding: '9px 16px', borderRadius: 6, textAlign: 'center', background: s.color, transition: 'width 0.5s ease' }}>
+              <div style={{ fontSize: 9, color: 'rgba(0,0,0,0.5)', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 700 }}>{s.label}</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#fff', marginTop: 2 }}>{fmtNum(s.value)}</div>
             </div>
-          );
-        })}
-      </div>
+          </React.Fragment>
+        );
+      })}
       {videoAvgWatch > 0 && (
-        <div style={{ marginTop: 10, textAlign: 'center', fontSize: 12, color: '#32cd32', fontWeight: 700 }}>
+        <div style={{ marginTop: 8, fontSize: 12, color: '#32cd32', fontWeight: 700 }}>
           Avg watch time: {fmtSec(videoAvgWatch)}
         </div>
       )}
@@ -350,31 +355,34 @@ function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
   );
   const sorted    = [...data].sort((a, b) => parseFloat(b[valueKey] || 0) - parseFloat(a[valueKey] || 0)).slice(0, 10);
   const formatted = sorted.map(d => ({ name: d[labelKey] || '—', val: parseFloat(d[valueKey] || 0) }));
-  const fmtTip    = v => [fmtNum(v), (valueKey || '').toUpperCase()];
+  const fmtTip = (v, _n, props) => [fmtNum(v), props.payload?.name || (valueKey || '').toUpperCase()];
 
   if (horizontal) {
     return (
       <ResponsiveContainer width="100%" height={Math.max(160, formatted.length * 28)}>
-        <BarChart data={formatted} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 60 }}>
+        <BarChart data={formatted} layout="vertical" margin={{ top: 0, right: 70, bottom: 0, left: 60 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
           <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.5)' }} tickLine={false} width={58} />
           <Tooltip contentStyle={TOOLTIP_STYLE} formatter={fmtTip} />
-          <Bar dataKey="val" fill={color || '#32cd32'} radius={[0, 3, 3, 0]} />
+          <Bar dataKey="val" fill={color || '#32cd32'} radius={[0, 3, 3, 0]}>
+            <LabelList dataKey="val" position="right" formatter={fmtNum} style={{ fontSize: 9, fill: 'rgba(232,245,233,0.55)', fontWeight: 600 }} />
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     );
   }
 
   return (
-    <ResponsiveContainer width="100%" height={180}>
-      <BarChart data={formatted} margin={{ top: 0, right: 8, bottom: 20, left: -20 }}>
+    <ResponsiveContainer width="100%" height={200}>
+      <BarChart data={formatted} margin={{ top: 18, right: 8, bottom: 20, left: -20 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" vertical={false} />
         <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.4)' }} tickLine={false} angle={-30} textAnchor="end" />
         <YAxis tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
         <Tooltip contentStyle={TOOLTIP_STYLE} formatter={fmtTip} />
         <Bar dataKey="val" radius={[3, 3, 0, 0]}>
           {formatted.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
+          <LabelList dataKey="val" position="top" formatter={fmtNum} style={{ fontSize: 9, fill: 'rgba(232,245,233,0.55)', fontWeight: 600 }} />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -1073,9 +1081,11 @@ export default function AdsMonitor() {
                       ? 'Click metric cards to plot on chart (max 3 at a time)'
                       : `Plotting: ${activeMetrics.map(k => METRICS.find(m => m.key === k)?.label).join(' · ')}`}
                   </div>
-                  {activeMetrics.length > 0 && prevChartDaily.length > 0 && (
+                  {activeMetrics.length > 0 && clientData?.prevDateStart && (
                     <button className="btn btn-ghost btn-sm" onClick={() => setShowPrevLine(v => !v)}
-                      style={{ fontSize: 10, padding: '3px 10px', borderColor: showPrevLine ? '#32cd32' : undefined, color: showPrevLine ? '#32cd32' : undefined }}>
+                      disabled={prevChartDaily.length === 0}
+                      title={prevChartDaily.length === 0 ? 'Reload page to fetch prev period data' : ''}
+                      style={{ fontSize: 10, padding: '3px 10px', borderColor: showPrevLine ? '#32cd32' : undefined, color: showPrevLine ? '#32cd32' : undefined, opacity: prevChartDaily.length === 0 ? 0.4 : 1 }}>
                       {showPrevLine ? '✓ Prev period' : '○ Compare prev period'}
                     </button>
                   )}
@@ -1118,7 +1128,7 @@ export default function AdsMonitor() {
 
                 <div className="glass" style={pg.engCard}>
                   <div style={pg.engCardTitle}>Video Retention</div>
-                  <VideoMilestoneBoxes
+                  <VideoRetentionFunnel
                     videoP25={displayTotals?.videoP25       || 0}
                     videoP50={displayTotals?.videoP50       || 0}
                     videoP75={displayTotals?.videoP75       || 0}
@@ -1166,34 +1176,32 @@ export default function AdsMonitor() {
                 <div style={{ padding: 32, textAlign: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 12 }}>Audience data unavailable</div>
               ) : (
                 <>
-                  {/* Row 1: Gender + Age */}
-                  <div style={pg.audRow}>
+                  {/* Row 1: Gender + Age + Platform */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr 1fr', gap: 14, marginBottom: 14 }}>
                     <div className="glass" style={pg.audCard}>
                       <div style={pg.audTitle}>Gender</div>
                       <AudienceDonut data={audienceData.gender} labelKey="gender" valueKey={audienceMetric} />
                     </div>
-                    <div className="glass" style={{ ...pg.audCard, flex: 2 }}>
+                    <div className="glass" style={pg.audCard}>
                       <div style={pg.audTitle}>Age Group</div>
                       <AudienceBar data={audienceData.age} labelKey="age" valueKey={audienceMetric} color="#32cd32" />
                     </div>
-                  </div>
-
-                  {/* Row 2: Platform + Device */}
-                  <div style={pg.audRow}>
                     <div className="glass" style={pg.audCard}>
                       <div style={pg.audTitle}>Platform</div>
                       <AudienceBar data={audienceData.platform} labelKey="publisher_platform" valueKey={audienceMetric} color="#1A7FCC" />
                     </div>
+                  </div>
+
+                  {/* Row 2: Device + Region */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14, marginBottom: 14 }}>
                     <div className="glass" style={pg.audCard}>
                       <div style={pg.audTitle}>Device</div>
                       <AudienceBar data={audienceData.device} labelKey="impression_device" valueKey={audienceMetric} color="#f5a623" />
                     </div>
-                  </div>
-
-                  {/* Row 3: Region */}
-                  <div className="glass" style={{ padding: '18px 20px', borderRadius: 12, marginBottom: 14 }}>
-                    <div style={pg.audTitle}>Region (Top 10)</div>
-                    <AudienceBar data={audienceData.region} labelKey="region" valueKey={audienceMetric} horizontal color="#a78bfa" />
+                    <div className="glass" style={pg.audCard}>
+                      <div style={pg.audTitle}>Region (Top 10)</div>
+                      <AudienceBar data={audienceData.region} labelKey="region" valueKey={audienceMetric} horizontal color="#a78bfa" />
+                    </div>
                   </div>
 
                   {/* Combo chart */}

@@ -1241,7 +1241,7 @@ app.get('/api/monitor/:clientId', async (req, res) => {
     const detailKey = `detail2_${rangeKey}`;
     const days      = calcDays(dateStart, dateStop);
     const prev      = getPreviousPeriod(dateStart, dateStop);
-    const prevKey   = `detail2_prev_${rangeKey}`;
+    const prevKey   = `detail2_prev3_${rangeKey}`; // v3: includes prevDaily
 
     const allClients = await readClients();
     const client     = allClients.find(c => c.id === req.params.clientId);
