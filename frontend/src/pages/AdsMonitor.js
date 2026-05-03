@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import { monitorAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
@@ -13,6 +13,7 @@ const fmtRMS = v => `RM ${parseFloat(v || 0).toLocaleString('en-MY', { minimumFr
 const fmtNum = v => Math.round(parseFloat(v || 0)).toLocaleString('en-MY');
 const fmtPct = v => `${parseFloat(v || 0).toFixed(2)}%`;
 const fmtSec = v => `${parseFloat(v || 0).toFixed(1)}s`;
+const fmtDec = v => parseFloat(v || 0).toFixed(2);
 
 function extractFromActions(actions, type) {
   if (!Array.isArray(actions)) return 0;
@@ -20,54 +21,77 @@ function extractFromActions(actions, type) {
   return f ? parseFloat(f.value || 0) : 0;
 }
 
-function detectBranch(name) {
-  const n = (name || '').toUpperCase();
-  if (n.includes('KL')) return 'KL';
-  if (n.includes('RC')) return 'RC';
-  if (n.includes('CR')) return 'CR';
-  return 'OTHER';
-}
-
 function calcChange(curr, prev, higherBetter) {
   if (!prev || prev === 0) return null;
-  const pct = ((curr - prev) / Math.abs(prev)) * 100;
+  const pct  = ((curr - prev) / Math.abs(prev)) * 100;
   const dir  = curr > prev ? 'up' : curr < prev ? 'down' : 'flat';
   const isGood = higherBetter === null ? null : higherBetter ? dir === 'up' : dir === 'down';
   return { pct: Math.abs(pct), dir, isGood };
 }
 
-// ── Metric definitions ────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 const METRICS = [
-  { key: 'spend',          label: 'Total Spend',       fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: null },
-  { key: 'avgDailySpend',  label: 'Avg Daily Spend',   fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: null },
-  { key: 'waConvos',       label: 'Conversations',     fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
-  { key: 'reach',          label: 'Reach',             fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
-  { key: 'impressions',    label: 'Impressions',       fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
-  { key: 'cpm',            label: 'CPM',               fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
-  { key: 'clicks',         label: 'Clicks',            fmt: fmtNum, chartFmt: v => Math.round(v),                       higherBetter: true  },
-  { key: 'ctr',            label: 'CTR',               fmt: fmtPct, chartFmt: v => `${parseFloat(v||0).toFixed(2)}%`,  higherBetter: true  },
-  { key: 'cpc',            label: 'CPC',               fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
-  { key: 'active',         label: 'Active Campaigns',  fmt: v => String(Math.round(v || 0)), chartFmt: null,            noCompare: true     },
+  { key: 'spend',          label: 'Total Spend',     fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: null  },
+  { key: 'avgDailySpend',  label: 'Avg Daily Spend', fmt: fmtRM,  chartFmt: null,                                      higherBetter: null  },
+  { key: 'costPerMessage', label: 'Cost / Message',  fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
+  { key: 'frequency',      label: 'Frequency',       fmt: fmtDec, chartFmt: fmtDec,                                   higherBetter: false },
+  { key: 'waConvos',       label: 'Conversations',   fmt: fmtNum, chartFmt: v => String(Math.round(v)),               higherBetter: true  },
+  { key: 'reach',          label: 'Reach',           fmt: fmtNum, chartFmt: v => String(Math.round(v)),               higherBetter: true  },
+  { key: 'impressions',    label: 'Impressions',     fmt: fmtNum, chartFmt: v => String(Math.round(v)),               higherBetter: true  },
+  { key: 'cpm',            label: 'CPM',             fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
+  { key: 'clicks',         label: 'Clicks',          fmt: fmtNum, chartFmt: v => String(Math.round(v)),               higherBetter: true  },
+  { key: 'ctr',            label: 'CTR',             fmt: fmtPct, chartFmt: v => `${parseFloat(v||0).toFixed(2)}%`,  higherBetter: true  },
+  { key: 'cpc',            label: 'CPC',             fmt: fmtRM,  chartFmt: v => `RM ${parseFloat(v||0).toFixed(2)}`, higherBetter: false },
+  { key: 'active',         label: 'Active Campaigns',fmt: v => String(Math.round(v || 0)), chartFmt: null,            noCompare: true     },
 ];
 
-const CHART_COLORS = ['#32cd32', '#f5a623', '#1A7FCC', '#ff4d4d', '#a78bfa'];
+const AUDIENCE_METRICS = [
+  { key: 'impressions', label: 'Impressions', fmt: fmtNum },
+  { key: 'reach',       label: 'Reach',       fmt: fmtNum },
+  { key: 'spend',       label: 'Spend',       fmt: fmtRMS },
+  { key: 'clicks',      label: 'Clicks',      fmt: fmtNum },
+];
+
+const COMBO_DIMS = [
+  { key: 'age',      label: 'Age',      dataKey: 'age'                },
+  { key: 'platform', label: 'Platform', dataKey: 'publisher_platform' },
+  { key: 'device',   label: 'Device',   dataKey: 'impression_device'  },
+  { key: 'gender',   label: 'Gender',   dataKey: 'gender'             },
+  { key: 'region',   label: 'Region',   dataKey: 'region'             },
+];
+
+const COMBO_METRIC_DEFS = [
+  { key: 'impressions', label: 'Impressions', fmt: fmtNum },
+  { key: 'reach',       label: 'Reach',       fmt: fmtNum },
+  { key: 'clicks',      label: 'Clicks',      fmt: fmtNum },
+  { key: 'spend',       label: 'Spend',       fmt: fmtRMS },
+  { key: 'ctr',         label: 'CTR',         fmt: v => `${parseFloat(v||0).toFixed(2)}%` },
+  { key: 'cpm',         label: 'CPM',         fmt: fmtRM  },
+  { key: 'cpc',         label: 'CPC',         fmt: fmtRM  },
+];
+
+const CHART_COLORS    = ['#32cd32', '#f5a623', '#1A7FCC', '#ff4d4d', '#a78bfa'];
 const AUDIENCE_COLORS = ['#32cd32', '#1A7FCC', '#f5a623', '#ff4d4d', '#a78bfa', '#06b6d4', '#f97316'];
 
 const RANGES = [
-  { value: '7d',        label: 'Last 7 days'  },
-  { value: '14d',       label: 'Last 14 days' },
-  { value: '30d',       label: 'Last 30 days' },
-  { value: 'this_month',label: 'This month'   },
-  { value: 'custom',    label: 'Custom'       },
+  { value: 'today',      label: 'Today'        },
+  { value: 'yesterday',  label: 'Yesterday'    },
+  { value: '7d',         label: 'Last 7 days'  },
+  { value: '14d',        label: 'Last 14 days' },
+  { value: '30d',        label: 'Last 30 days' },
+  { value: 'this_month', label: 'This month'   },
+  { value: 'custom',     label: 'Custom'       },
 ];
+
+const TOOLTIP_STYLE = { background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 };
 
 // ── Change Badge ──────────────────────────────────────────────────────────────
 function ChangeBadge({ curr, prev, higherBetter }) {
   const chg = calcChange(curr, prev, higherBetter);
   if (!chg) return null;
-  const arrow  = chg.dir === 'up' ? '↑' : chg.dir === 'down' ? '↓' : '→';
-  const color  = chg.isGood === null ? 'rgba(232,245,233,0.4)' : chg.isGood ? '#32cd32' : '#ff4d4d';
-  const bg     = chg.isGood === null ? 'rgba(255,255,255,0.06)' : chg.isGood ? 'rgba(50,205,50,0.12)' : 'rgba(255,77,77,0.12)';
+  const arrow = chg.dir === 'up' ? '↑' : chg.dir === 'down' ? '↓' : '→';
+  const color = chg.isGood === null ? 'rgba(232,245,233,0.4)' : chg.isGood ? '#32cd32' : '#ff4d4d';
+  const bg    = chg.isGood === null ? 'rgba(255,255,255,0.06)' : chg.isGood ? 'rgba(50,205,50,0.12)' : 'rgba(255,77,77,0.12)';
   return (
     <span style={{ fontSize: 10, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '2px 6px', whiteSpace: 'nowrap' }}>
       {arrow} {chg.pct.toFixed(1)}%
@@ -78,33 +102,27 @@ function ChangeBadge({ curr, prev, higherBetter }) {
 // ── Metric Card ───────────────────────────────────────────────────────────────
 function MetricCard({ metric, value, prevValue, activeCampaignCount, active, onClick }) {
   const displayValue = metric.key === 'active' ? fmtNum(activeCampaignCount) : metric.fmt(value);
-  const isActive = active;
-
   return (
-    <div
-      onClick={onClick}
-      style={{
-        ...mc.card,
-        border: isActive ? '1.5px solid #32cd32' : '1px solid rgba(50,205,50,0.12)',
-        background: isActive ? 'rgba(50,205,50,0.08)' : 'rgba(7,80,60,0.15)',
-        cursor: 'pointer',
-        boxShadow: isActive ? '0 0 0 3px rgba(50,205,50,0.12)' : undefined,
-      }}
-    >
+    <div onClick={onClick} style={{
+      ...mc.card,
+      border: active ? '1.5px solid #32cd32' : '1px solid rgba(50,205,50,0.12)',
+      background: active ? 'rgba(50,205,50,0.08)' : 'rgba(7,80,60,0.15)',
+      cursor: metric.chartFmt !== null ? 'pointer' : 'default',
+      boxShadow: active ? '0 0 0 3px rgba(50,205,50,0.12)' : undefined,
+    }}>
       <div style={mc.label}>{metric.label}</div>
       <div style={mc.value}>{displayValue}</div>
-      {!metric.noCompare && (
+      {!metric.noCompare ? (
         <div style={mc.compare}>
-          <ChangeBadge curr={parseFloat(value||0)} prev={parseFloat(prevValue||0)} higherBetter={metric.higherBetter} />
-          {prevValue > 0 && <span style={mc.prevLabel}>vs prev</span>}
+          <ChangeBadge curr={parseFloat(value || 0)} prev={parseFloat(prevValue || 0)} higherBetter={metric.higherBetter} />
+          {parseFloat(prevValue || 0) > 0 && <span style={mc.prevLabel}>vs prev</span>}
         </div>
-      )}
-      {metric.noCompare && (
+      ) : (
         <div style={mc.compare}>
           <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>live status</span>
         </div>
       )}
-      {isActive && <div style={mc.activeBar} />}
+      {active && <div style={mc.activeBar} />}
     </div>
   );
 }
@@ -119,27 +137,36 @@ const mc = {
 };
 
 // ── Multi-metric Line Chart ───────────────────────────────────────────────────
-function MetricLineChart({ daily, activeMetricKeys }) {
+function MetricLineChart({ daily, prevDaily, activeMetricKeys, showPrevPeriod }) {
   if (!daily || daily.length === 0 || activeMetricKeys.length === 0) {
     return (
       <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 13 }}>
-        {activeMetricKeys.length === 0 ? 'Click metric cards above to plot on chart (max 3)' : 'No daily data available'}
+        {activeMetricKeys.length === 0 ? 'Click metric cards above to plot on chart (max 3)' : 'No daily data'}
       </div>
     );
   }
 
-  // Build chart data with normalization (0-100 index per metric)
   const metricMaxes = {};
   activeMetricKeys.forEach(k => {
-    metricMaxes[k] = Math.max(...daily.map(d => parseFloat(d[k] || 0)), 1);
+    const vals = [
+      ...daily.map(d => parseFloat(d[k] || 0)),
+      ...(showPrevPeriod && prevDaily?.length ? prevDaily.map(d => parseFloat(d[k] || 0)) : []),
+    ];
+    metricMaxes[k] = Math.max(...vals, 1);
   });
 
-  const chartData = daily.map(d => {
-    const row = { date: d.date_start?.slice(5) || d.date || '' };
+  const chartData = daily.map((d, idx) => {
+    const row = { date: d.date_start?.slice(5) || '' };
     activeMetricKeys.forEach(k => {
       row[k]        = parseFloat(d[k] || 0);
       row[`${k}_n`] = (parseFloat(d[k] || 0) / metricMaxes[k]) * 100;
     });
+    if (showPrevPeriod && prevDaily?.[idx]) {
+      activeMetricKeys.forEach(k => {
+        row[`p_${k}`]   = parseFloat(prevDaily[idx][k] || 0);
+        row[`p_${k}_n`] = (parseFloat(prevDaily[idx][k] || 0) / metricMaxes[k]) * 100;
+      });
+    }
     return row;
   });
 
@@ -150,23 +177,33 @@ function MetricLineChart({ daily, activeMetricKeys }) {
       <LineChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: -20 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.08)" />
         <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.35)' }} tickLine={false} />
-        <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.35)' }} tickLine={false} tickFormatter={v => `${Math.round(v)}`} />
+        <YAxis domain={[0, 105]} tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.35)' }} tickLine={false} tickFormatter={v => `${Math.round(v)}`} />
         <Tooltip
-          contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }}
+          contentStyle={TOOLTIP_STYLE}
           labelStyle={{ color: 'rgba(232,245,233,0.6)', marginBottom: 4 }}
           formatter={(val, name) => {
-            const m = metaDefs.find(x => `${x.key}_n` === name);
-            const actual = m ? chartData.find(d => d[`${m.key}_n`] === val)?.[m.key] : val;
-            return [m ? m.chartFmt(actual) : val, m?.label || name];
+            const isPrev = name.startsWith('p_');
+            const key    = (isPrev ? name.slice(2) : name).replace('_n', '');
+            const m      = metaDefs.find(x => x.key === key);
+            const rawKey = isPrev ? `p_${key}` : key;
+            const row    = chartData.find(d => d[name] === val);
+            const actual = row?.[rawKey] ?? val;
+            return [m ? m.chartFmt(actual) : actual, m ? `${m.label}${isPrev ? ' (prev)' : ''}` : name];
           }}
         />
         <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={name => {
-          const m = metaDefs.find(x => `${x.key}_n` === name);
-          return <span style={{ color: 'rgba(232,245,233,0.7)' }}>{m?.label || name}</span>;
+          const isPrev = name.startsWith('p_');
+          const key    = (isPrev ? name.slice(2) : name).replace('_n', '');
+          const m      = metaDefs.find(x => x.key === key);
+          return <span style={{ color: 'rgba(232,245,233,0.7)' }}>{m?.label || name}{isPrev ? ' ···' : ''}</span>;
         }} />
         {metaDefs.map((m, i) => (
-          <Line key={m.key} type="monotone" dataKey={`${m.key}_n`} stroke={CHART_COLORS[i]} strokeWidth={2}
-            dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+          <React.Fragment key={m.key}>
+            <Line type="monotone" dataKey={`${m.key}_n`} stroke={CHART_COLORS[i]} strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+            {showPrevPeriod && prevDaily?.length > 0 && (
+              <Line type="monotone" dataKey={`p_${m.key}_n`} stroke={CHART_COLORS[i]} strokeWidth={1.5} strokeDasharray="5 3" dot={false} opacity={0.45} />
+            )}
+          </React.Fragment>
         ))}
       </LineChart>
     </ResponsiveContainer>
@@ -175,9 +212,9 @@ function MetricLineChart({ daily, activeMetricKeys }) {
 
 // ── AI Findings Row ───────────────────────────────────────────────────────────
 const FINDING_COLORS = {
-  warning:  { bg: 'rgba(245,166,35,0.08)', border: 'rgba(245,166,35,0.25)', title: '#f5a623', icon: '⚠' },
-  positive: { bg: 'rgba(50,205,50,0.08)',  border: 'rgba(50,205,50,0.25)',  title: '#32cd32', icon: '✓' },
-  info:     { bg: 'rgba(26,127,204,0.08)', border: 'rgba(26,127,204,0.25)', title: '#1A7FCC', icon: '◎' },
+  warning:  { bg: 'rgba(245,166,35,0.08)',  border: 'rgba(245,166,35,0.25)', title: '#f5a623', icon: '⚠' },
+  positive: { bg: 'rgba(50,205,50,0.08)',   border: 'rgba(50,205,50,0.25)',  title: '#32cd32', icon: '✓' },
+  info:     { bg: 'rgba(26,127,204,0.08)',  border: 'rgba(26,127,204,0.25)', title: '#1A7FCC', icon: '◎' },
 };
 
 function AIFindingsRow({ findings, loading }) {
@@ -187,19 +224,14 @@ function AIFindingsRow({ findings, loading }) {
     </div>
   );
   if (!findings || findings.length === 0) return null;
-
   return (
-    <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '4px 0 16px', marginBottom: 4 }}>
+    <div style={{ display: 'flex', gap: 12, overflowX: 'auto', padding: '4px 0 16px' }}>
       {findings.map((f, i) => {
-        const style = FINDING_COLORS[f.type] || FINDING_COLORS.info;
+        const s = FINDING_COLORS[f.type] || FINDING_COLORS.info;
         return (
-          <div key={i} style={{
-            flexShrink: 0, width: 240,
-            background: style.bg, border: `1px solid ${style.border}`,
-            borderRadius: 10, padding: '14px 16px'
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: style.title, marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span>{style.icon}</span>
+          <div key={i} style={{ flexShrink: 0, width: 240, background: s.bg, border: `1px solid ${s.border}`, borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: s.title, marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span>{s.icon}</span>
               <span style={{ textTransform: 'uppercase', letterSpacing: 0.8 }}>{f.title}</span>
             </div>
             <div style={{ fontSize: 12, color: 'rgba(232,245,233,0.7)', lineHeight: 1.6 }}>{f.body}</div>
@@ -210,9 +242,8 @@ function AIFindingsRow({ findings, loading }) {
   );
 }
 
-// ── Engagement Donut ──────────────────────────────────────────────────────────
-function EngagementDonut({ reactions, comments, shares, saves }) {
-  const total = reactions + comments + shares + saves;
+// ── Post Engagement Bar ───────────────────────────────────────────────────────
+function PostEngagementBar({ reactions, comments, shares, saves, postEngagement }) {
   const data = [
     { name: 'Reactions', value: reactions },
     { name: 'Comments',  value: comments  },
@@ -220,73 +251,65 @@ function EngagementDonut({ reactions, comments, shares, saves }) {
     { name: 'Saves',     value: saves     },
   ].filter(d => d.value > 0);
 
-  if (total === 0) return (
-    <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 12 }}>
-      No engagement data
-    </div>
-  );
-
   return (
-    <div style={{ position: 'relative' }}>
-      <ResponsiveContainer width="100%" height={180}>
-        <PieChart>
-          <Pie data={data} cx="50%" cy="50%" innerRadius={52} outerRadius={78} dataKey="value" paddingAngle={2}>
-            {data.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i]} />)}
-          </Pie>
-          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }}
-            formatter={(v, n) => [fmtNum(v), n]} />
-        </PieChart>
-      </ResponsiveContainer>
-      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', pointerEvents: 'none' }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>{fmtNum(total)}</div>
-        <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Total</div>
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: 8 }}>
-        {data.map((d, i) => (
-          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
-            <div style={{ width: 8, height: 8, borderRadius: '50%', background: AUDIENCE_COLORS[i] }} />
-            <span style={{ color: 'rgba(232,245,233,0.5)' }}>{d.name}</span>
-            <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{fmtNum(d.value)}</span>
-          </div>
-        ))}
+    <div>
+      {data.length === 0 ? (
+        <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 12 }}>No engagement data</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={140}>
+          <BarChart data={data} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 64 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" horizontal={false} />
+            <XAxis type="number" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
+            <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: 'rgba(232,245,233,0.55)' }} tickLine={false} width={62} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, n) => [fmtNum(v), n]} />
+            <Bar dataKey="value" radius={[0, 3, 3, 0]}>
+              {data.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+      <div style={{ marginTop: 12, padding: '9px 14px', background: 'rgba(50,205,50,0.07)', borderRadius: 8, border: '1px solid rgba(50,205,50,0.18)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.45)', textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: 600 }}>Total Post Engagement</span>
+        <span style={{ fontSize: 18, fontWeight: 800, color: '#32cd32' }}>{fmtNum(postEngagement)}</span>
       </div>
     </div>
   );
 }
 
-// ── Conversion Funnel ─────────────────────────────────────────────────────────
-function ConversionFunnel({ reach, clicks, messages, funnelType, videoP25, videoP50, videoP75, videoP100, videoAvgWatch }) {
-  if (funnelType === 'video') {
-    const steps = [
-      { label: '25% Plays', value: videoP25  },
-      { label: '50% Plays', value: videoP50  },
-      { label: '75% Plays', value: videoP75  },
-      { label: '100% Plays', value: videoP100 },
-    ];
-    const max = Math.max(videoP25, 1);
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+// ── Video Milestone Boxes ─────────────────────────────────────────────────────
+function VideoMilestoneBoxes({ videoP25, videoP50, videoP75, videoP100, videoAvgWatch }) {
+  const steps = [
+    { label: '25% Plays',  value: videoP25,  color: CHART_COLORS[0] },
+    { label: '50% Plays',  value: videoP50,  color: CHART_COLORS[1] },
+    { label: '75% Plays',  value: videoP75,  color: CHART_COLORS[2] },
+    { label: '100% Plays', value: videoP100, color: CHART_COLORS[3] },
+  ];
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
         {steps.map((s, i) => {
-          const prev  = i > 0 ? steps[i - 1].value : null;
-          const rate  = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(1) : null;
-          const width = Math.max((s.value / max) * 100, 12);
+          const prev = i > 0 ? steps[i - 1].value : null;
+          const drop = prev && prev > 0 ? ((s.value / prev) * 100).toFixed(1) : null;
           return (
-            <React.Fragment key={s.label}>
-              {rate && <div style={fn.rate}>↓ {rate}% retention</div>}
-              <div style={{ ...fn.step, width: `${width}%`, background: CHART_COLORS[i] }}>
-                <div style={fn.stepLabel}>{s.label}</div>
-                <div style={fn.stepVal}>{fmtNum(s.value)}</div>
-              </div>
-            </React.Fragment>
+            <div key={s.label} style={{ padding: '10px 12px', background: 'rgba(0,0,0,0.2)', borderRadius: 8, border: `1px solid ${s.color}33` }}>
+              <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: s.color, lineHeight: 1.1 }}>{fmtNum(s.value)}</div>
+              {drop && <div style={{ fontSize: 9, color: 'rgba(232,245,233,0.3)', marginTop: 3 }}>↓ {drop}% retention</div>}
+            </div>
           );
         })}
-        {videoAvgWatch > 0 && (
-          <div style={fn.watchTime}>Avg watch time: {fmtSec(videoAvgWatch)}</div>
-        )}
       </div>
-    );
-  }
+      {videoAvgWatch > 0 && (
+        <div style={{ marginTop: 10, textAlign: 'center', fontSize: 12, color: '#32cd32', fontWeight: 700 }}>
+          Avg watch time: {fmtSec(videoAvgWatch)}
+        </div>
+      )}
+    </div>
+  );
+}
 
+// ── Conversion Funnel (WA) ────────────────────────────────────────────────────
+function ConversionFunnel({ reach, clicks, messages }) {
   const steps = [
     { label: 'Reach',    value: reach    },
     { label: 'Clicks',   value: clicks   },
@@ -302,7 +325,7 @@ function ConversionFunnel({ reach, clicks, messages, funnelType, videoP25, video
         return (
           <React.Fragment key={s.label}>
             {rate && <div style={fn.rate}>↓ {rate}% conversion</div>}
-            <div style={{ ...fn.step, width: `${width}%`, background: ['#07503c', '#0a6b4e', '#32cd32'][i] }}>
+            <div style={{ ...fn.step, width: `${width}%`, background: ['#07503c','#0a6b4e','#32cd32'][i] }}>
               <div style={fn.stepLabel}>{s.label}</div>
               <div style={fn.stepVal}>{fmtNum(s.value)}</div>
             </div>
@@ -314,20 +337,20 @@ function ConversionFunnel({ reach, clicks, messages, funnelType, videoP25, video
 }
 
 const fn = {
-  step:      { minWidth: 100, padding: '10px 20px', borderRadius: 6, textAlign: 'center', transition: 'width 0.5s ease' },
+  step:      { minWidth: 80, padding: '10px 20px', borderRadius: 6, textAlign: 'center', transition: 'width 0.5s ease' },
   stepLabel: { fontSize: 10, color: 'rgba(232,245,233,0.6)', textTransform: 'uppercase', letterSpacing: 0.6 },
   stepVal:   { fontSize: 18, fontWeight: 800, color: '#fff', marginTop: 2 },
-  rate:      { fontSize: 10, color: 'rgba(232,245,233,0.35)', letterSpacing: 0.3 },
-  watchTime: { marginTop: 8, fontSize: 12, color: '#32cd32', fontWeight: 700 },
+  rate:      { fontSize: 10, color: 'rgba(232,245,233,0.35)' },
 };
 
-// ── Audience Bar Chart ────────────────────────────────────────────────────────
+// ── Audience Charts ───────────────────────────────────────────────────────────
 function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
   if (!data || data.length === 0) return (
     <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 11 }}>No data</div>
   );
   const sorted    = [...data].sort((a, b) => parseFloat(b[valueKey] || 0) - parseFloat(a[valueKey] || 0)).slice(0, 10);
   const formatted = sorted.map(d => ({ name: d[labelKey] || '—', val: parseFloat(d[valueKey] || 0) }));
+  const fmtTip    = v => [fmtNum(v), (valueKey || '').toUpperCase()];
 
   if (horizontal) {
     return (
@@ -336,7 +359,7 @@ function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
           <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'rgba(232,245,233,0.5)' }} tickLine={false} width={58} />
-          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={fmtTip} />
           <Bar dataKey="val" fill={color || '#32cd32'} radius={[0, 3, 3, 0]} />
         </BarChart>
       </ResponsiveContainer>
@@ -349,7 +372,7 @@ function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.07)" vertical={false} />
         <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.4)' }} tickLine={false} angle={-30} textAnchor="end" />
         <YAxis tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} />
-        <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+        <Tooltip contentStyle={TOOLTIP_STYLE} formatter={fmtTip} />
         <Bar dataKey="val" radius={[3, 3, 0, 0]}>
           {formatted.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
         </Bar>
@@ -359,9 +382,13 @@ function AudienceBar({ data, labelKey, valueKey, horizontal, color }) {
 }
 
 function AudienceDonut({ data, labelKey, valueKey }) {
-  const sorted  = [...(data || [])].sort((a, b) => parseFloat(b[valueKey]||0) - parseFloat(a[valueKey]||0));
-  const entries = sorted.map(d => ({ name: d[labelKey] || '—', value: parseFloat(d[valueKey] || 0) })).filter(d => d.value > 0);
-  if (entries.length === 0) return <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 11 }}>No data</div>;
+  const entries = [...(data || [])]
+    .sort((a, b) => parseFloat(b[valueKey] || 0) - parseFloat(a[valueKey] || 0))
+    .map(d => ({ name: d[labelKey] || '—', value: parseFloat(d[valueKey] || 0) }))
+    .filter(d => d.value > 0);
+  if (entries.length === 0) return (
+    <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 11 }}>No data</div>
+  );
   return (
     <div>
       <ResponsiveContainer width="100%" height={160}>
@@ -369,7 +396,7 @@ function AudienceDonut({ data, labelKey, valueKey }) {
           <Pie data={entries} cx="50%" cy="50%" innerRadius={42} outerRadius={65} dataKey="value" paddingAngle={2}>
             {entries.map((_, i) => <Cell key={i} fill={AUDIENCE_COLORS[i % AUDIENCE_COLORS.length]} />)}
           </Pie>
-          <Tooltip contentStyle={{ background: '#03140e', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 8, fontSize: 11 }} />
+          <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, n) => [fmtNum(v), n]} />
         </PieChart>
       </ResponsiveContainer>
       <div style={{ display: 'flex', gap: '4px 14px', flexWrap: 'wrap', marginTop: 6 }}>
@@ -385,15 +412,77 @@ function AudienceDonut({ data, labelKey, valueKey }) {
   );
 }
 
-// ── Action Widget ─────────────────────────────────────────────────────────────
-function ActionWidget({ clientId, clientCode }) {
+// ── Combo Chart ───────────────────────────────────────────────────────────────
+function ComboChart({ audienceData, comboDim, comboSel }) {
+  const dimDef  = COMBO_DIMS.find(d => d.key === comboDim);
+  const rawData = audienceData?.[comboDim] || [];
+  const sorted  = [...rawData].sort((a, b) => parseFloat(b['impressions'] || 0) - parseFloat(a['impressions'] || 0)).slice(0, 10);
+
+  const metricMaxes = {};
+  comboSel.forEach(m => {
+    metricMaxes[m.key] = Math.max(...sorted.map(d => parseFloat(d[m.key] || 0)), 1);
+  });
+
+  const chartData = sorted.map(d => {
+    const row = { name: d[dimDef?.dataKey || 'age'] || '—' };
+    comboSel.forEach(m => {
+      row[m.key]        = parseFloat(d[m.key] || 0);
+      row[`${m.key}_n`] = (parseFloat(d[m.key] || 0) / metricMaxes[m.key]) * 100;
+    });
+    return row;
+  });
+
+  if (comboSel.length === 0 || sorted.length === 0) {
+    return (
+      <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(232,245,233,0.25)', fontSize: 13 }}>
+        {sorted.length === 0 ? 'No audience data loaded' : 'Select metrics below to plot'}
+      </div>
+    );
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 24, left: -10 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(50,205,50,0.08)" vertical={false} />
+        <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.4)' }} tickLine={false} angle={-20} textAnchor="end" />
+        <YAxis domain={[0, 110]} tick={{ fontSize: 9, fill: 'rgba(232,245,233,0.3)' }} tickLine={false} tickFormatter={v => `${Math.round(v)}`} />
+        <Tooltip
+          contentStyle={TOOLTIP_STYLE}
+          formatter={(val, name) => {
+            const key  = name.replace('_n', '');
+            const mDef = COMBO_METRIC_DEFS.find(x => x.key === key);
+            const row  = chartData.find(d => d[name] === val);
+            return [mDef ? mDef.fmt(row?.[key] ?? val) : val, mDef?.label || name];
+          }}
+        />
+        <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={name => {
+          const mDef = COMBO_METRIC_DEFS.find(x => `${x.key}_n` === name);
+          return <span style={{ color: 'rgba(232,245,233,0.7)' }}>{mDef?.label || name}</span>;
+        }} />
+        {comboSel.map((m, i) => m.type === 'bar'
+          ? <Bar  key={m.key} dataKey={`${m.key}_n`} fill={CHART_COLORS[i]} fillOpacity={0.8} radius={[3,3,0,0]} />
+          : <Line key={m.key} type="monotone" dataKey={`${m.key}_n`} stroke={CHART_COLORS[i]} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+        )}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ── Threaded Action Widget ────────────────────────────────────────────────────
+function ThreadActionWidget({ clientId, clientCode }) {
   const toast = useToast();
   const { user } = useAuth();
-  const [open,   setOpen]   = useState(false);
-  const [actions,setActions]= useState([]);
-  const [form,   setForm]   = useState({ issue: '', metric: '', recommendation: '', severity: 'minor' });
-  const [saving, setSaving] = useState(false);
-  const panelRef = useRef(null);
+  const [open,             setOpen]            = useState(false);
+  const [view,             setView]            = useState('list');
+  const [actions,          setActions]         = useState([]);
+  const [selectedAction,   setSelectedAction]  = useState(null);
+  const [newForm,          setNewForm]         = useState({ issue: '', metric: '', recommendation: '', severity: 'minor' });
+  const [replyText,        setReplyText]       = useState('');
+  const [replyAttachment,  setReplyAttachment] = useState(null);
+  const [saving,           setSaving]          = useState(false);
+  const fileInputRef   = useRef(null);
+  const messagesEndRef = useRef(null);
+  const panelRef       = useRef(null);
 
   const load = useCallback(async () => {
     if (!clientId) return;
@@ -401,6 +490,7 @@ function ActionWidget({ clientId, clientCode }) {
   }, [clientId]);
 
   useEffect(() => { load(); }, [load]);
+
   useEffect(() => {
     if (!open) return;
     const h = e => { if (panelRef.current && !panelRef.current.contains(e.target)) setOpen(false); };
@@ -408,16 +498,43 @@ function ActionWidget({ clientId, clientCode }) {
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
 
-  const handleAdd = async (e) => {
+  useEffect(() => {
+    if (view === 'thread') messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [view, actions]);
+
+  useEffect(() => {
+    if (selectedAction) {
+      const updated = actions.find(a => a.id === selectedAction.id);
+      if (updated) setSelectedAction(updated);
+    }
+  }, [actions]);
+
+  const handleNewThread = async e => {
     e.preventDefault();
-    if (!form.issue.trim()) return;
+    if (!newForm.issue.trim()) return;
     setSaving(true);
     try {
-      await monitorAPI.addAction(clientId, { ...form, clientCode });
-      setForm({ issue: '', metric: '', recommendation: '', severity: 'minor' });
+      await monitorAPI.addAction(clientId, { ...newForm, clientCode });
+      setNewForm({ issue: '', metric: '', recommendation: '', severity: 'minor' });
       await load();
-      toast('Action added.', 'success');
-    } catch { toast('Failed to add action.', 'error'); }
+      setView('list');
+      toast('Thread created.', 'success');
+    } catch { toast('Failed to create thread.', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const handleSendReply = async () => {
+    if (!replyText.trim() && !replyAttachment) return;
+    setSaving(true);
+    try {
+      await monitorAPI.addReply(selectedAction.id, {
+        message: replyText,
+        attachments: replyAttachment ? [replyAttachment] : [],
+      });
+      setReplyText('');
+      setReplyAttachment(null);
+      await load();
+    } catch { toast('Failed to send reply.', 'error'); }
     finally { setSaving(false); }
   };
 
@@ -425,61 +542,169 @@ function ActionWidget({ clientId, clientCode }) {
     try { await monitorAPI.updateAction(actionId, { status }); await load(); } catch {}
   };
 
+  const handleFileChange = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast('File too large (max 5 MB)', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = evt => setReplyAttachment({ name: file.name, type: file.type, data: evt.target.result.split(',')[1] });
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
   const openCount = actions.filter(a => a.status === 'open' || a.status === 'in_progress').length;
+  const SC = { open: '#f5a623', in_progress: '#1A7FCC', done: '#32cd32', escalated: '#ff4d4d' };
+  const fmtTime = iso => new Date(iso).toLocaleString('en-MY', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const currentAction = view === 'thread' ? (actions.find(a => a.id === selectedAction?.id) || selectedAction) : null;
 
   return (
     <>
-      {/* Floating button */}
       <button onClick={() => setOpen(v => !v)} style={aw.fab} title="Action Board">
         ◉
         {openCount > 0 && <span style={aw.fabBadge}>{openCount}</span>}
       </button>
 
-      {/* Slide-out panel */}
       {open && (
         <div ref={panelRef} style={aw.panel}>
-          <div style={aw.panelHead}>
-            <span style={aw.panelTitle}>Action Board</span>
-            {clientCode && <span style={aw.panelClient}>{clientCode}</span>}
-            <button onClick={() => setOpen(false)} style={aw.closeBtn}>✕</button>
+          {/* Header */}
+          <div style={aw.head}>
+            {view !== 'list' && <button onClick={() => setView('list')} style={aw.iconBtn}>←</button>}
+            <span style={aw.title}>{view === 'new' ? 'New Thread' : view === 'thread' ? 'Thread' : 'Action Board'}</span>
+            {view === 'list' && clientCode && <span style={aw.clientTag}>{clientCode}</span>}
+            {view === 'list' && <button onClick={() => setView('new')} className="btn btn-primary btn-sm" style={{ fontSize: 10, padding: '3px 10px' }}>+ New</button>}
+            <button onClick={() => setOpen(false)} style={aw.iconBtn}>✕</button>
           </div>
 
-          <form onSubmit={handleAdd} style={aw.form}>
-            <input className="form-input" placeholder="Issue *" value={form.issue} onChange={e => setForm(p => ({ ...p, issue: e.target.value }))} required style={{ marginBottom: 7 }} />
-            <input className="form-input" placeholder="Metric (e.g. CTR, CPM)" value={form.metric} onChange={e => setForm(p => ({ ...p, metric: e.target.value }))} style={{ marginBottom: 7 }} />
-            <input className="form-input" placeholder="Recommendation" value={form.recommendation} onChange={e => setForm(p => ({ ...p, recommendation: e.target.value }))} style={{ marginBottom: 7 }} />
-            <div style={{ display: 'flex', gap: 8 }}>
-              <select className="form-input" style={{ flex: 1 }} value={form.severity} onChange={e => setForm(p => ({ ...p, severity: e.target.value }))}>
+          {/* New Thread Form */}
+          {view === 'new' && (
+            <form onSubmit={handleNewThread} style={{ padding: '14px 16px', flex: 1, overflowY: 'auto' }}>
+              <input className="form-input" placeholder="Issue *" value={newForm.issue} onChange={e => setNewForm(p => ({ ...p, issue: e.target.value }))} required style={{ marginBottom: 8 }} />
+              <input className="form-input" placeholder="Metric (e.g. CTR, CPM)" value={newForm.metric} onChange={e => setNewForm(p => ({ ...p, metric: e.target.value }))} style={{ marginBottom: 8 }} />
+              <input className="form-input" placeholder="Recommendation" value={newForm.recommendation} onChange={e => setNewForm(p => ({ ...p, recommendation: e.target.value }))} style={{ marginBottom: 8 }} />
+              <select className="form-input" style={{ marginBottom: 16 }} value={newForm.severity} onChange={e => setNewForm(p => ({ ...p, severity: e.target.value }))}>
                 <option value="minor">Minor</option>
                 <option value="major">Major</option>
               </select>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>{saving ? '…' : '+ Add'}</button>
-            </div>
-          </form>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="submit" className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={saving}>{saving ? '…' : 'Create Thread'}</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setView('list')}>Cancel</button>
+              </div>
+            </form>
+          )}
 
-          <div style={aw.list}>
-            {actions.length === 0
-              ? <div style={aw.empty}>No actions yet.</div>
-              : actions.map(a => (
-                  <div key={a.id} style={{ ...aw.item, borderLeft: `3px solid ${a.severity === 'major' ? '#ff4d4d' : '#f5a623'}` }}>
-                    <div style={aw.itemIssue}>{a.issue}</div>
-                    {a.recommendation && <div style={aw.itemRec}>{a.recommendation}</div>}
-                    <div style={aw.itemMeta}>
-                      <span style={{ color: { open:'#f5a623', in_progress:'#1A7FCC', done:'#32cd32', escalated:'#ff4d4d' }[a.status] || '#aaa', fontSize: 10, fontWeight: 700 }}>
-                        {a.status.replace('_', ' ')}
-                      </span>
-                      <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>{a.createdBy}</span>
+          {/* Thread List */}
+          {view === 'list' && (
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {actions.length === 0
+                ? <div style={{ color: 'rgba(232,245,233,0.25)', fontSize: 12, textAlign: 'center', padding: '28px 0' }}>No threads yet.</div>
+                : actions.map(a => (
+                    <div key={a.id} onClick={() => { setSelectedAction(a); setView('thread'); }}
+                      style={{ ...aw.threadItem, borderLeft: `3px solid ${a.severity === 'major' ? '#ff4d4d' : '#f5a623'}` }}>
+                      <div style={aw.threadTitle}>{a.issue}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ ...aw.pill, background: `${SC[a.status]||'#aaa'}22`, color: SC[a.status]||'#aaa' }}>
+                          {(a.status||'').replace('_',' ')}
+                        </span>
+                        <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>{a.createdBy}</span>
+                        {(a.replies||[]).length > 0 && (
+                          <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.25)', marginLeft: 'auto' }}>
+                            {(a.replies||[]).length} repl{(a.replies||[]).length === 1 ? 'y' : 'ies'}
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <div style={aw.itemBtns}>
-                      {['open','in_progress','done','escalated'].map(s => (
-                        <button key={s} onClick={() => handleStatus(a.id, s)} className="btn btn-ghost btn-sm"
-                          style={{ fontSize: 9, padding: '2px 6px', opacity: a.status === s ? 1 : 0.4 }}>{s.replace('_', ' ')}</button>
+                  ))
+              }
+            </div>
+          )}
+
+          {/* Thread Detail */}
+          {view === 'thread' && currentAction && (
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+              {/* Status row */}
+              <div style={{ padding: '6px 12px', borderBottom: '1px solid rgba(50,205,50,0.08)', display: 'flex', gap: 4, flexWrap: 'wrap', flexShrink: 0 }}>
+                {['open','in_progress','done','escalated'].map(s => (
+                  <button key={s} onClick={() => handleStatus(currentAction.id, s)} className="btn btn-ghost btn-sm"
+                    style={{ fontSize: 9, padding: '2px 6px', opacity: currentAction.status === s ? 1 : 0.35,
+                      borderColor: currentAction.status === s ? SC[s] : undefined,
+                      color: currentAction.status === s ? SC[s] : undefined }}>
+                    {s.replace('_',' ')}
+                  </button>
+                ))}
+              </div>
+
+              {/* Messages */}
+              <div style={{ overflowY: 'auto', flex: 1, padding: '12px 12px 4px' }}>
+                {/* Original post */}
+                <div style={aw.bubble}>
+                  <div style={aw.bubbleHeader}>
+                    <span style={aw.author}>{currentAction.createdBy}</span>
+                    <span style={aw.time}>{fmtTime(currentAction.createdAt)}</span>
+                  </div>
+                  <div style={aw.msgText}>{currentAction.issue}</div>
+                  {currentAction.metric && <div style={aw.msgMeta}>Metric: {currentAction.metric}</div>}
+                  {currentAction.recommendation && <div style={aw.msgMeta}>Rec: {currentAction.recommendation}</div>}
+                </div>
+
+                {/* Replies */}
+                {(currentAction.replies || []).map(r => {
+                  const isMine = r.author === user?.username;
+                  return (
+                    <div key={r.replyId} style={{
+                      ...aw.bubble,
+                      marginLeft: isMine ? 16 : 0,
+                      marginRight: isMine ? 0 : 16,
+                      background: isMine ? 'rgba(50,205,50,0.08)' : 'rgba(0,0,0,0.2)',
+                      border: isMine ? '1px solid rgba(50,205,50,0.15)' : '1px solid rgba(255,255,255,0.04)',
+                    }}>
+                      <div style={aw.bubbleHeader}>
+                        <span style={aw.author}>{r.author}</span>
+                        <span style={aw.time}>{fmtTime(r.createdAt)}</span>
+                      </div>
+                      {r.message && <div style={aw.msgText}>{r.message}</div>}
+                      {(r.attachments || []).map((att, ai) => (
+                        <div key={ai} style={{ marginTop: 6 }}>
+                          {att.type?.startsWith('image/') ? (
+                            <img src={`data:${att.type};base64,${att.data}`} alt={att.name}
+                              style={{ maxWidth: '100%', borderRadius: 6, maxHeight: 160, objectFit: 'cover', display: 'block' }} />
+                          ) : (
+                            <a href={`data:${att.type};base64,${att.data}`} download={att.name}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#32cd32', fontSize: 11, textDecoration: 'none', background: 'rgba(50,205,50,0.08)', padding: '4px 8px', borderRadius: 5 }}>
+                              📄 {att.name}
+                            </a>
+                          )}
+                        </div>
                       ))}
                     </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Reply input */}
+              <div style={{ padding: '8px 12px', borderTop: '1px solid rgba(50,205,50,0.08)', flexShrink: 0, background: 'rgba(7,80,60,0.2)' }}>
+                {replyAttachment && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, padding: '4px 8px', background: 'rgba(50,205,50,0.08)', borderRadius: 6, border: '1px solid rgba(50,205,50,0.15)' }}>
+                    <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.6)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📎 {replyAttachment.name}</span>
+                    <button onClick={() => setReplyAttachment(null)} style={{ background: 'none', border: 'none', color: 'rgba(232,245,233,0.4)', cursor: 'pointer', fontSize: 12 }}>✕</button>
                   </div>
-                ))
-            }
-          </div>
+                )}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+                  <textarea className="form-input" placeholder="Reply… (Enter to send)" value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendReply(); } }}
+                    rows={2} style={{ flex: 1, resize: 'none', fontSize: 12 }} />
+                  <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,.pdf" style={{ display: 'none' }} />
+                  <button onClick={() => fileInputRef.current?.click()} className="btn btn-ghost btn-sm" style={{ padding: '7px 8px', flexShrink: 0 }} title="Attach image or PDF">📎</button>
+                  <button onClick={handleSendReply} className="btn btn-primary btn-sm" style={{ padding: '7px 12px', flexShrink: 0 }}
+                    disabled={saving || (!replyText.trim() && !replyAttachment)}>
+                    {saving ? '…' : '→'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -487,21 +712,22 @@ function ActionWidget({ clientId, clientCode }) {
 }
 
 const aw = {
-  fab:       { position: 'fixed', bottom: 28, right: 28, width: 48, height: 48, borderRadius: '50%', background: '#32cd32', color: '#03140e', border: 'none', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, boxShadow: '0 4px 16px rgba(50,205,50,0.4)', fontWeight: 900 },
-  fabBadge:  { position: 'absolute', top: -4, right: -4, background: '#ff4d4d', color: '#fff', borderRadius: '50%', width: 18, height: 18, fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg)' },
-  panel:     { position: 'fixed', bottom: 86, right: 28, width: 320, maxHeight: '70vh', background: 'var(--card-bg,#0a1f16)', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 12, display: 'flex', flexDirection: 'column', zIndex: 299, boxShadow: '0 8px 40px rgba(0,0,0,0.5)', overflow: 'hidden' },
-  panelHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(50,205,50,0.1)', background: 'rgba(7,80,60,0.3)', flexShrink: 0 },
-  panelTitle:{ fontSize: 12, fontWeight: 800, color: '#32cd32', letterSpacing: 1, textTransform: 'uppercase', flex: 1 },
-  panelClient:{ fontSize: 10, color: 'rgba(232,245,233,0.4)', fontWeight: 700 },
-  closeBtn:  { background: 'none', border: 'none', color: 'rgba(232,245,233,0.4)', cursor: 'pointer', fontSize: 12 },
-  form:      { padding: '12px 16px', borderBottom: '1px solid rgba(50,205,50,0.08)', flexShrink: 0 },
-  list:      { overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8, flex: 1 },
-  empty:     { color: 'rgba(232,245,233,0.25)', fontSize: 12, textAlign: 'center', padding: '16px 0' },
-  item:      { background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 7, padding: '10px 12px' },
-  itemIssue: { fontSize: 12, color: 'rgba(232,245,233,0.85)', fontWeight: 600, marginBottom: 3 },
-  itemRec:   { fontSize: 11, color: 'rgba(232,245,233,0.4)', fontStyle: 'italic', marginBottom: 5 },
-  itemMeta:  { display: 'flex', gap: 10, marginBottom: 6 },
-  itemBtns:  { display: 'flex', gap: 4, flexWrap: 'wrap' },
+  fab:         { position: 'fixed', bottom: 28, right: 28, width: 48, height: 48, borderRadius: '50%', background: '#32cd32', color: '#03140e', border: 'none', fontSize: 20, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, boxShadow: '0 4px 16px rgba(50,205,50,0.4)', fontWeight: 900 },
+  fabBadge:    { position: 'absolute', top: -4, right: -4, background: '#ff4d4d', color: '#fff', borderRadius: '50%', width: 18, height: 18, fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid var(--bg)' },
+  panel:       { position: 'fixed', bottom: 86, right: 28, width: 340, maxHeight: '76vh', background: 'var(--card-bg,#0a1f16)', border: '1px solid rgba(50,205,50,0.2)', borderRadius: 12, display: 'flex', flexDirection: 'column', zIndex: 299, boxShadow: '0 8px 40px rgba(0,0,0,0.5)', overflow: 'hidden' },
+  head:        { display: 'flex', alignItems: 'center', gap: 6, padding: '12px 14px', borderBottom: '1px solid rgba(50,205,50,0.1)', background: 'rgba(7,80,60,0.3)', flexShrink: 0 },
+  title:       { fontSize: 12, fontWeight: 800, color: '#32cd32', letterSpacing: 1, textTransform: 'uppercase', flex: 1 },
+  clientTag:   { fontSize: 10, color: 'rgba(232,245,233,0.4)', fontWeight: 700 },
+  iconBtn:     { background: 'none', border: 'none', color: 'rgba(232,245,233,0.5)', cursor: 'pointer', fontSize: 13, padding: '2px 4px', lineHeight: 1 },
+  threadItem:  { padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer' },
+  threadTitle: { fontSize: 12, color: 'rgba(232,245,233,0.85)', fontWeight: 600, marginBottom: 5 },
+  pill:        { fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.4 },
+  bubble:      { background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 },
+  bubbleHeader:{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  author:      { fontSize: 10, fontWeight: 700, color: 'rgba(232,245,233,0.7)' },
+  time:        { fontSize: 9, color: 'rgba(232,245,233,0.3)' },
+  msgText:     { fontSize: 12, color: 'rgba(232,245,233,0.85)', lineHeight: 1.5 },
+  msgMeta:     { fontSize: 11, color: 'rgba(232,245,233,0.4)', marginTop: 3, fontStyle: 'italic' },
 };
 
 // ── Client Panel ──────────────────────────────────────────────────────────────
@@ -512,24 +738,18 @@ function ClientPanel({ clients, selectedId, onSelect, collapsed, onToggleCollaps
       <button onClick={onToggleCollapse} style={cp.collapseBtn} title={collapsed ? 'Expand' : 'Collapse'}>
         <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>‹</span>
       </button>
-
       {!collapsed && <div style={cp.heading}>Clients</div>}
-
       <div style={cp.list}>
         {clients.map(c => {
           const isSelected = c.id === selectedId;
           return (
             <div key={c.id}>
-              <button
-                onClick={() => onSelect(c.id)}
-                style={{
-                  ...cp.item,
-                  background: isSelected ? 'rgba(50,205,50,0.12)' : 'transparent',
-                  border: isSelected ? '1px solid rgba(50,205,50,0.3)' : '1px solid transparent',
-                  justifyContent: collapsed ? 'center' : 'flex-start',
-                }}
-                title={collapsed ? c.name : ''}
-              >
+              <button onClick={() => onSelect(c.id)} style={{
+                ...cp.item,
+                background: isSelected ? 'rgba(50,205,50,0.12)' : 'transparent',
+                border: isSelected ? '1px solid rgba(50,205,50,0.3)' : '1px solid transparent',
+                justifyContent: collapsed ? 'center' : 'flex-start',
+              }} title={collapsed ? c.name : ''}>
                 <span style={{ ...cp.avatar, background: isSelected ? '#32cd32' : '#1a3a2a', color: isSelected ? '#03140e' : '#32cd32' }}>
                   {c.clientCode?.[0]}
                 </span>
@@ -540,14 +760,14 @@ function ClientPanel({ clients, selectedId, onSelect, collapsed, onToggleCollaps
                   </div>
                 )}
               </button>
-              {/* VK Branch filter */}
               {isSelected && c.clientCode === 'VK' && !collapsed && (
                 <div style={cp.branches}>
-                  {['ALL', 'KL', 'RC', 'CR'].map(b => (
-                    <button key={b} onClick={() => onSelectBranch(b)}
-                      style={{ ...cp.branch, background: selectedBranch === b ? '#32cd32' : 'rgba(50,205,50,0.08)', color: selectedBranch === b ? '#03140e' : '#32cd32' }}>
-                      {b}
-                    </button>
+                  {['ALL','KL','RC','CR'].map(b => (
+                    <button key={b} onClick={() => onSelectBranch(b)} style={{
+                      ...cp.branch,
+                      background: selectedBranch === b ? '#32cd32' : 'rgba(50,205,50,0.08)',
+                      color: selectedBranch === b ? '#03140e' : '#32cd32',
+                    }}>{b}</button>
                   ))}
                 </div>
               )}
@@ -587,43 +807,29 @@ function Section({ title, children, right }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AdsMonitor() {
-  const toast  = useToast();
-  const { user } = useAuth();
+  const toast   = useToast();
 
-  // Layout
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-
-  // Clients
-  const [clients,     setClients]     = useState([]);
-  const [selectedId,  setSelectedId]  = useState(null);
+  const [clients,        setClients]        = useState([]);
+  const [selectedId,     setSelectedId]     = useState(null);
   const [selectedBranch, setSelectedBranch] = useState('ALL');
-
-  // Data
-  const [clientData,    setClientData]    = useState(null);
-  const [audienceData,  setAudienceData]  = useState(null);
-  const [loadingMain,   setLoadingMain]   = useState(false);
-  const [loadingAudience, setLoadingAudience] = useState(false);
-
-  // Date range
-  const [range,       setRange]       = useState('30d');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd,   setCustomEnd]   = useState('');
-
-  // Line chart
-  const [activeMetrics, setActiveMetrics] = useState([]);
-
-  // AI
-  const [showAI,     setShowAI]     = useState(false);
-  const [aiFindings, setAiFindings] = useState(null);
-  const [loadingAI,  setLoadingAI]  = useState(false);
-  const [aiConfirm,  setAiConfirm]  = useState(false);
-  const [aiCtx,      setAiCtx]      = useState('');
-
-  // Engagement funnel
-  const [funnelType, setFunnelType] = useState('conversion');
-
-  // Audience metric
+  const [clientData,     setClientData]     = useState(null);
+  const [audienceData,   setAudienceData]   = useState(null);
+  const [loadingMain,    setLoadingMain]    = useState(false);
+  const [loadingAudience,setLoadingAudience]= useState(false);
+  const [range,          setRange]          = useState('30d');
+  const [customStart,    setCustomStart]    = useState('');
+  const [customEnd,      setCustomEnd]      = useState('');
+  const [activeMetrics,  setActiveMetrics]  = useState([]);
+  const [showPrevLine,   setShowPrevLine]   = useState(false);
+  const [showAI,         setShowAI]         = useState(false);
+  const [aiFindings,     setAiFindings]     = useState(null);
+  const [loadingAI,      setLoadingAI]      = useState(false);
+  const [aiConfirm,      setAiConfirm]      = useState(false);
+  const [aiCtx,          setAiCtx]          = useState('');
   const [audienceMetric, setAudienceMetric] = useState('impressions');
+  const [comboDim,       setComboDim]       = useState('age');
+  const [comboSel,       setComboSel]       = useState([]);
 
   const rangeParams = useMemo(() => (
     range === 'custom' && customStart && customEnd
@@ -631,7 +837,6 @@ export default function AdsMonitor() {
       : { range }
   ), [range, customStart, customEnd]);
 
-  // Load client list
   useEffect(() => {
     const load = async () => {
       try {
@@ -646,7 +851,6 @@ export default function AdsMonitor() {
     load();
   }, []);
 
-  // Load main client data when selection or range changes
   useEffect(() => {
     if (!selectedId) return;
     const load = async () => {
@@ -655,6 +859,7 @@ export default function AdsMonitor() {
       setAiFindings(null);
       setShowAI(false);
       setActiveMetrics([]);
+      setShowPrevLine(false);
       try {
         const data = await monitorAPI.client(selectedId, rangeParams);
         setClientData(data);
@@ -665,27 +870,24 @@ export default function AdsMonitor() {
     load();
   }, [selectedId, JSON.stringify(rangeParams)]);
 
-  // Load audience data separately
   useEffect(() => {
     if (!selectedId) return;
     const load = async () => {
       setLoadingAudience(true);
       setAudienceData(null);
+      setComboSel([]);
       try {
         const data = await monitorAPI.audience(selectedId, rangeParams);
         setAudienceData(data);
-      } catch { /* audience section shows empty state */ }
+      } catch {}
       finally { setLoadingAudience(false); }
     };
     load();
   }, [selectedId, JSON.stringify(rangeParams)]);
 
-  const handleSelectClient = (id) => {
-    setSelectedId(id);
-    setSelectedBranch('ALL');
-  };
+  const handleSelectClient = id => { setSelectedId(id); setSelectedBranch('ALL'); };
 
-  const toggleMetric = (key) => {
+  const toggleMetric = key => {
     setActiveMetrics(prev => {
       if (prev.includes(key)) return prev.filter(k => k !== key);
       if (prev.length >= 3)   return [...prev.slice(1), key];
@@ -693,17 +895,26 @@ export default function AdsMonitor() {
     });
   };
 
+  const toggleComboMetric = key => {
+    setComboSel(prev => {
+      const existing = prev.find(m => m.key === key);
+      if (existing) return prev.filter(m => m.key !== key);
+      if (prev.length >= 3) return [...prev.slice(1), { key, type: 'bar' }];
+      return [...prev, { key, type: 'bar' }];
+    });
+  };
+
+  const toggleComboType = key => {
+    setComboSel(prev => prev.map(m => m.key === key ? { ...m, type: m.type === 'bar' ? 'line' : 'bar' } : m));
+  };
+
   const handleAIClick = () => {
     if (!showAI) { setAiConfirm(true); return; }
-    setShowAI(false);
-    setAiFindings(null);
+    setShowAI(false); setAiFindings(null);
   };
 
   const handleAIConfirm = async () => {
-    setAiConfirm(false);
-    setShowAI(true);
-    setLoadingAI(true);
-    setAiFindings(null);
+    setAiConfirm(false); setShowAI(true); setLoadingAI(true); setAiFindings(null);
     try {
       const res = await monitorAPI.diagnose(selectedId, { ...rangeParams, context: aiCtx || undefined });
       setAiFindings(res.findings || []);
@@ -713,53 +924,71 @@ export default function AdsMonitor() {
     } finally { setLoadingAI(false); }
   };
 
-  // Build display totals (branch-aware)
   const displayTotals = useMemo(() => {
     if (!clientData) return null;
     const { totals, branches } = clientData;
-    if (selectedBranch === 'ALL' || !branches || !branches[selectedBranch]) return totals;
-    const b = branches[selectedBranch];
-    const ctr = b.impressions > 0 ? b.clicks / b.impressions * 100 : 0;
-    const cpm = b.impressions > 0 ? b.spend  / b.impressions * 1000 : 0;
-    const cpc = b.clicks      > 0 ? b.spend  / b.clicks : 0;
-    const days = clientData.daily?.length || 1;
-    return { ...totals, spend: b.spend, impressions: b.impressions, clicks: b.clicks, ctr, cpm, cpc, waConvos: b.results, primaryResults: b.results, avgDailySpend: b.spend / days };
+    let t = { ...totals };
+    if (selectedBranch !== 'ALL' && branches?.[selectedBranch]) {
+      const b    = branches[selectedBranch];
+      const days = clientData.daily?.length || 1;
+      t = {
+        ...totals,
+        spend: b.spend, impressions: b.impressions, clicks: b.clicks,
+        ctr: b.impressions > 0 ? b.clicks / b.impressions * 100 : 0,
+        cpm: b.impressions > 0 ? b.spend  / b.impressions * 1000 : 0,
+        cpc: b.clicks      > 0 ? b.spend  / b.clicks : 0,
+        waConvos: b.results, primaryResults: b.results,
+        avgDailySpend: b.spend / days,
+      };
+    }
+    return {
+      ...t,
+      costPerMessage: t.waConvos > 0 ? t.spend / t.waConvos : 0,
+      frequency:      t.reach    > 0 ? t.impressions / t.reach : 0,
+    };
   }, [clientData, selectedBranch]);
 
-  const displayPrevTotals = clientData?.prevTotals;
-
-  // Process daily data for chart
-  const chartDaily = useMemo(() => {
-    if (!clientData?.daily) return [];
-    return clientData.daily.map(d => ({
-      date_start:   d.date_start,
-      spend:        parseFloat(d.spend        || 0),
-      reach:        parseFloat(d.reach        || 0),
-      impressions:  parseFloat(d.impressions  || 0),
-      clicks:       parseFloat(d.clicks       || 0),
-      ctr:          parseFloat(d.ctr          || 0),
-      cpm:          parseFloat(d.cpm          || 0),
-      cpc:          parseFloat(d.cpc          || 0),
-      waConvos:     extractFromActions(d.actions, 'onsite_conversion.messaging_first_reply'),
-    }));
+  const displayPrevTotals = useMemo(() => {
+    const p = clientData?.prevTotals;
+    if (!p) return null;
+    return {
+      ...p,
+      costPerMessage: p.waConvos > 0 ? p.spend / p.waConvos : 0,
+      frequency:      p.reach    > 0 ? p.impressions / p.reach : 0,
+    };
   }, [clientData]);
+
+  const processDaily = d => {
+    const sp = parseFloat(d.spend || 0);
+    const wc = extractFromActions(d.actions, 'onsite_conversion.messaging_first_reply');
+    return {
+      date_start:     d.date_start,
+      spend:          sp,
+      reach:          parseFloat(d.reach       || 0),
+      impressions:    parseFloat(d.impressions || 0),
+      clicks:         parseFloat(d.clicks      || 0),
+      ctr:            parseFloat(d.ctr         || 0),
+      cpm:            parseFloat(d.cpm         || 0),
+      cpc:            parseFloat(d.cpc         || 0),
+      frequency:      parseFloat(d.frequency   || 0),
+      waConvos:       wc,
+      costPerMessage: wc > 0 ? sp / wc : 0,
+    };
+  };
+
+  const chartDaily     = useMemo(() => (clientData?.daily    || []).map(processDaily), [clientData]);
+  const prevChartDaily = useMemo(() => (clientData?.prevDaily || []).map(processDaily), [clientData]);
 
   const selectedClient = clients.find(c => c.id === selectedId);
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
-      {/* Inner client panel */}
       <ClientPanel
-        clients={clients}
-        selectedId={selectedId}
-        onSelect={handleSelectClient}
-        collapsed={panelCollapsed}
-        onToggleCollapse={() => setPanelCollapsed(v => !v)}
-        selectedBranch={selectedBranch}
-        onSelectBranch={setSelectedBranch}
+        clients={clients} selectedId={selectedId} onSelect={handleSelectClient}
+        collapsed={panelCollapsed} onToggleCollapse={() => setPanelCollapsed(v => !v)}
+        selectedBranch={selectedBranch} onSelectBranch={setSelectedBranch}
       />
 
-      {/* Main content */}
       <div style={{ flex: 1, overflowX: 'hidden', padding: '28px 32px' }} className="fade-up">
 
         {/* Page header */}
@@ -768,28 +997,17 @@ export default function AdsMonitor() {
             <h1 style={pg.title}>Analytic</h1>
             <p style={pg.sub}>{selectedClient ? `${selectedClient.clientCode} — ${selectedClient.name}` : 'Select a client'}</p>
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {/* AI button */}
-            <button
-              className={`btn ${showAI ? 'btn-primary' : 'btn-ghost'} btn-sm`}
-              onClick={handleAIClick}
-              disabled={!clientData || loadingAI}
-              style={{ borderColor: showAI ? '#32cd32' : undefined }}
-            >
-              {loadingAI ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Analysing…</> : showAI ? '✕ Hide AI' : '◎ AI Analyse'}
-            </button>
-          </div>
+          <button className={`btn ${showAI ? 'btn-primary' : 'btn-ghost'} btn-sm`} onClick={handleAIClick}
+            disabled={!clientData || loadingAI} style={{ borderColor: showAI ? '#32cd32' : undefined }}>
+            {loadingAI ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Analysing…</> : showAI ? '✕ Hide AI' : '◎ AI Analyse'}
+          </button>
         </div>
 
         {/* AI confirm dialog */}
         {aiConfirm && (
           <div style={pg.confirmBox}>
-            <div style={pg.confirmText}>
-              ⚠ Running AI diagnosis uses API tokens (costs money). Confirm to proceed?
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <input className="form-input" placeholder="Optional: add context for AI…" value={aiCtx} onChange={e => setAiCtx(e.target.value)} style={{ marginTop: 8 }} />
-            </div>
+            <div style={pg.confirmText}>⚠ Running AI diagnosis uses API tokens (costs money). Confirm to proceed?</div>
+            <input className="form-input" placeholder="Optional: add context for AI…" value={aiCtx} onChange={e => setAiCtx(e.target.value)} style={{ marginTop: 8, marginBottom: 12 }} />
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-primary btn-sm" onClick={handleAIConfirm}>Confirm</button>
               <button className="btn btn-ghost btn-sm" onClick={() => setAiConfirm(false)}>Cancel</button>
@@ -826,7 +1044,7 @@ export default function AdsMonitor() {
           <div style={{ padding: 60, textAlign: 'center', color: 'rgba(232,245,233,0.25)' }}>Select a client to view analytics</div>
         ) : (
           <>
-            {/* ── PERFORMANCE SECTION ── */}
+            {/* ── PERFORMANCE ── */}
             <Section title="Performance" right={
               clientData?.prevDateStart && (
                 <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.3)' }}>
@@ -834,15 +1052,11 @@ export default function AdsMonitor() {
                 </span>
               )
             }>
-              {/* AI Findings */}
               {showAI && <AIFindingsRow findings={aiFindings} loading={loadingAI} />}
 
-              {/* Metric cards grid */}
               <div style={pg.metricGrid}>
                 {METRICS.map(m => (
-                  <MetricCard
-                    key={m.key}
-                    metric={m}
+                  <MetricCard key={m.key} metric={m}
                     value={m.key === 'active' ? clientData.activeCampaignCount : displayTotals?.[m.key]}
                     prevValue={m.key === 'active' ? null : displayPrevTotals?.[m.key]}
                     activeCampaignCount={clientData.activeCampaignCount}
@@ -852,35 +1066,41 @@ export default function AdsMonitor() {
                 ))}
               </div>
 
-              {/* Line chart */}
               <div className="glass" style={{ padding: '16px 20px', marginTop: 16, borderRadius: 12 }}>
-                <div style={{ fontSize: 11, color: 'rgba(232,245,233,0.35)', marginBottom: 8 }}>
-                  {activeMetrics.length === 0
-                    ? 'Click metric cards to plot on chart (max 3 at a time)'
-                    : `Plotting: ${activeMetrics.map(k => METRICS.find(m => m.key === k)?.label).join(' · ')}`}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: 'rgba(232,245,233,0.35)' }}>
+                    {activeMetrics.length === 0
+                      ? 'Click metric cards to plot on chart (max 3 at a time)'
+                      : `Plotting: ${activeMetrics.map(k => METRICS.find(m => m.key === k)?.label).join(' · ')}`}
+                  </div>
+                  {activeMetrics.length > 0 && prevChartDaily.length > 0 && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setShowPrevLine(v => !v)}
+                      style={{ fontSize: 10, padding: '3px 10px', borderColor: showPrevLine ? '#32cd32' : undefined, color: showPrevLine ? '#32cd32' : undefined }}>
+                      {showPrevLine ? '✓ Prev period' : '○ Compare prev period'}
+                    </button>
+                  )}
                 </div>
-                <MetricLineChart daily={chartDaily} activeMetricKeys={activeMetrics} />
+                <MetricLineChart daily={chartDaily} prevDaily={prevChartDaily} activeMetricKeys={activeMetrics} showPrevPeriod={showPrevLine} />
               </div>
             </Section>
 
-            {/* ── ENGAGEMENT SECTION ── */}
+            {/* ── ENGAGEMENT ── */}
             <Section title="Engagement">
-              <div style={pg.engagementGrid}>
-                {/* Post engagement donut */}
+              <div style={pg.engGrid}>
                 <div className="glass" style={pg.engCard}>
                   <div style={pg.engCardTitle}>Post Engagement</div>
-                  <EngagementDonut
+                  <PostEngagementBar
                     reactions={displayTotals?.reactions || 0}
-                    comments={displayTotals?.comments || 0}
-                    shares={displayTotals?.shares || 0}
-                    saves={displayTotals?.saves || 0}
+                    comments={displayTotals?.comments   || 0}
+                    shares={displayTotals?.shares       || 0}
+                    saves={displayTotals?.saves         || 0}
+                    postEngagement={displayTotals?.postEngagement || 0}
                   />
                 </div>
 
-                {/* Engagement metric cards */}
                 <div className="glass" style={pg.engCard}>
                   <div style={pg.engCardTitle}>Engagement Metrics</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
                     {[
                       { label: 'Video Views',     value: fmtNum(displayTotals?.videoViews    || 0) },
                       { label: 'Page Engagement', value: fmtNum(displayTotals?.pageEngagement|| 0) },
@@ -896,43 +1116,50 @@ export default function AdsMonitor() {
                   </div>
                 </div>
 
-                {/* Funnel */}
                 <div className="glass" style={pg.engCard}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                    <div style={pg.engCardTitle}>Conversion Funnel</div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {[{ key: 'conversion', label: 'WA' }, { key: 'video', label: 'Video' }].map(t => (
-                        <button key={t.key} onClick={() => setFunnelType(t.key)} className="btn btn-ghost btn-sm"
-                          style={{ fontSize: 10, padding: '3px 8px', borderColor: funnelType === t.key ? '#32cd32' : undefined, color: funnelType === t.key ? '#32cd32' : undefined }}>
-                          {t.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <ConversionFunnel
-                    reach={displayTotals?.reach || 0}
-                    clicks={displayTotals?.clicks || 0}
-                    messages={displayTotals?.waConvos || 0}
-                    funnelType={funnelType}
-                    videoP25={displayTotals?.videoP25 || 0}
-                    videoP50={displayTotals?.videoP50 || 0}
-                    videoP75={displayTotals?.videoP75 || 0}
-                    videoP100={displayTotals?.videoP100 || 0}
+                  <div style={pg.engCardTitle}>Video Retention</div>
+                  <VideoMilestoneBoxes
+                    videoP25={displayTotals?.videoP25       || 0}
+                    videoP50={displayTotals?.videoP50       || 0}
+                    videoP75={displayTotals?.videoP75       || 0}
+                    videoP100={displayTotals?.videoP100     || 0}
                     videoAvgWatch={displayTotals?.videoAvgWatch || 0}
+                  />
+                </div>
+
+                <div className="glass" style={pg.engCard}>
+                  <div style={pg.engCardTitle}>Conversion Funnel</div>
+                  <ConversionFunnel
+                    reach={displayTotals?.reach     || 0}
+                    clicks={displayTotals?.clicks   || 0}
+                    messages={displayTotals?.waConvos || 0}
                   />
                 </div>
               </div>
             </Section>
 
-            {/* ── AUDIENCE SECTION ── */}
-            <Section title="Audience" right={
-              <select className="form-input" style={{ padding: '4px 10px', fontSize: 11, width: 140 }}
-                value={audienceMetric} onChange={e => setAudienceMetric(e.target.value)}>
-                {['impressions','clicks','spend','reach','ctr','cpm','cpc'].map(k => (
-                  <option key={k} value={k}>{k.toUpperCase()}</option>
-                ))}
-              </select>
-            }>
+            {/* ── AUDIENCE ── */}
+            <Section title="Audience">
+              {/* 4 metric filter cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 20 }}>
+                {AUDIENCE_METRICS.map(m => {
+                  const val      = displayTotals?.[m.key] || 0;
+                  const isActive = audienceMetric === m.key;
+                  return (
+                    <div key={m.key} onClick={() => setAudienceMetric(m.key)} style={{
+                      padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                      background: isActive ? 'rgba(50,205,50,0.10)' : 'rgba(7,80,60,0.15)',
+                      border: isActive ? '1.5px solid rgba(50,205,50,0.4)' : '1px solid rgba(50,205,50,0.1)',
+                      transition: 'all 0.2s',
+                      boxShadow: isActive ? '0 0 0 3px rgba(50,205,50,0.1)' : 'none',
+                    }}>
+                      <div style={{ fontSize: 9, fontWeight: 600, color: 'rgba(232,245,233,0.4)', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>{m.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: isActive ? '#32cd32' : 'var(--text-primary)' }}>{m.fmt(val)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
               {loadingAudience ? (
                 <div style={{ padding: 48, textAlign: 'center' }}><div className="spinner" /></div>
               ) : !audienceData ? (
@@ -940,33 +1167,79 @@ export default function AdsMonitor() {
               ) : (
                 <>
                   {/* Row 1: Gender + Age */}
-                  <div style={pg.audienceRow}>
-                    <div className="glass" style={pg.audienceCard}>
-                      <div style={pg.audienceCardTitle}>Gender</div>
+                  <div style={pg.audRow}>
+                    <div className="glass" style={pg.audCard}>
+                      <div style={pg.audTitle}>Gender</div>
                       <AudienceDonut data={audienceData.gender} labelKey="gender" valueKey={audienceMetric} />
                     </div>
-                    <div className="glass" style={{ ...pg.audienceCard, flex: 2 }}>
-                      <div style={pg.audienceCardTitle}>Age Group</div>
+                    <div className="glass" style={{ ...pg.audCard, flex: 2 }}>
+                      <div style={pg.audTitle}>Age Group</div>
                       <AudienceBar data={audienceData.age} labelKey="age" valueKey={audienceMetric} color="#32cd32" />
                     </div>
                   </div>
 
                   {/* Row 2: Platform + Device */}
-                  <div style={pg.audienceRow}>
-                    <div className="glass" style={pg.audienceCard}>
-                      <div style={pg.audienceCardTitle}>Platform</div>
+                  <div style={pg.audRow}>
+                    <div className="glass" style={pg.audCard}>
+                      <div style={pg.audTitle}>Platform</div>
                       <AudienceBar data={audienceData.platform} labelKey="publisher_platform" valueKey={audienceMetric} color="#1A7FCC" />
                     </div>
-                    <div className="glass" style={pg.audienceCard}>
-                      <div style={pg.audienceCardTitle}>Device</div>
+                    <div className="glass" style={pg.audCard}>
+                      <div style={pg.audTitle}>Device</div>
                       <AudienceBar data={audienceData.device} labelKey="impression_device" valueKey={audienceMetric} color="#f5a623" />
                     </div>
                   </div>
 
                   {/* Row 3: Region */}
-                  <div className="glass" style={{ padding: '18px 20px', borderRadius: 12 }}>
-                    <div style={pg.audienceCardTitle}>Region (Top 10)</div>
+                  <div className="glass" style={{ padding: '18px 20px', borderRadius: 12, marginBottom: 14 }}>
+                    <div style={pg.audTitle}>Region (Top 10)</div>
                     <AudienceBar data={audienceData.region} labelKey="region" valueKey={audienceMetric} horizontal color="#a78bfa" />
+                  </div>
+
+                  {/* Combo chart */}
+                  <div className="glass" style={{ padding: '18px 20px', borderRadius: 12 }}>
+                    <div style={pg.audTitle}>Trend Analysis — Combo Chart</div>
+
+                    {/* Dimension selector */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.35)', alignSelf: 'center', marginRight: 4 }}>X-Axis:</span>
+                      {COMBO_DIMS.map(d => (
+                        <button key={d.key} onClick={() => { setComboDim(d.key); setComboSel([]); }} className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 10, padding: '3px 10px', borderColor: comboDim === d.key ? '#32cd32' : undefined, color: comboDim === d.key ? '#32cd32' : undefined }}>
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Metric selector + type toggle */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: 10, color: 'rgba(232,245,233,0.35)', marginRight: 4 }}>Metrics:</span>
+                      {COMBO_METRIC_DEFS.map(m => {
+                        const sel = comboSel.find(s => s.key === m.key);
+                        return (
+                          <div key={m.key} style={{ display: 'flex', gap: 0 }}>
+                            <button onClick={() => toggleComboMetric(m.key)} className="btn btn-ghost btn-sm"
+                              style={{ fontSize: 10, padding: '3px 8px', borderColor: sel ? CHART_COLORS[comboSel.indexOf(sel)] : undefined, color: sel ? CHART_COLORS[comboSel.indexOf(sel)] : undefined,
+                                borderTopRightRadius: sel ? 0 : undefined, borderBottomRightRadius: sel ? 0 : undefined }}>
+                              {m.label}
+                            </button>
+                            {sel && (
+                              <button onClick={() => toggleComboType(m.key)} style={{
+                                fontSize: 9, fontWeight: 800, padding: '3px 6px', cursor: 'pointer',
+                                background: sel.type === 'bar' ? 'rgba(50,205,50,0.15)' : 'rgba(26,127,204,0.15)',
+                                border: `1px solid ${CHART_COLORS[comboSel.indexOf(sel)]}`,
+                                borderLeft: 'none', borderRadius: '0 4px 4px 0',
+                                color: CHART_COLORS[comboSel.indexOf(sel)],
+                              }}>
+                                {sel.type === 'bar' ? 'B' : 'L'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <ComboChart audienceData={audienceData} comboDim={comboDim} comboSel={comboSel} setComboSel={setComboSel} />
                   </div>
                 </>
               )}
@@ -975,26 +1248,23 @@ export default function AdsMonitor() {
         )}
       </div>
 
-      {/* Action Widget — only when client is selected */}
-      {selectedId && (
-        <ActionWidget clientId={selectedId} clientCode={selectedClient?.clientCode} />
-      )}
+      {selectedId && <ThreadActionWidget clientId={selectedId} clientCode={selectedClient?.clientCode} />}
     </div>
   );
 }
 
 const pg = {
-  header:          { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 },
-  title:           { fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
-  sub:             { fontSize: 12, color: 'var(--text-muted)', marginTop: 3 },
-  rangeBar:        { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' },
-  metricGrid:      { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 },
-  engagementGrid:  { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 },
-  engCard:         { padding: '18px 20px', borderRadius: 12 },
-  engCardTitle:    { fontSize: 11, fontWeight: 700, color: 'rgba(50,205,50,0.6)', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 14 },
-  audienceRow:     { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14, marginBottom: 14 },
-  audienceCard:    { padding: '18px 20px', borderRadius: 12, flex: 1 },
-  audienceCardTitle:{ fontSize: 10, fontWeight: 700, color: 'rgba(50,205,50,0.5)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 12 },
-  confirmBox:      { background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.3)', borderRadius: 10, padding: '16px 20px', marginBottom: 20 },
-  confirmText:     { fontSize: 13, color: 'rgba(232,245,233,0.8)', marginBottom: 8, fontWeight: 600 },
+  header:    { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 },
+  title:     { fontSize: 26, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub:       { fontSize: 12, color: 'var(--text-muted)', marginTop: 3 },
+  rangeBar:  { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' },
+  metricGrid:{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(155px,1fr))', gap: 10 },
+  engGrid:   { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 14 },
+  engCard:   { padding: '18px 20px', borderRadius: 12 },
+  engCardTitle:{ fontSize: 11, fontWeight: 700, color: 'rgba(50,205,50,0.6)', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 14 },
+  audRow:    { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 14, marginBottom: 14 },
+  audCard:   { padding: '18px 20px', borderRadius: 12, flex: 1 },
+  audTitle:  { fontSize: 10, fontWeight: 700, color: 'rgba(50,205,50,0.5)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 12 },
+  confirmBox:{ background: 'rgba(245,166,35,0.08)', border: '1px solid rgba(245,166,35,0.3)', borderRadius: 10, padding: '16px 20px', marginBottom: 20 },
+  confirmText:{ fontSize: 13, color: 'rgba(232,245,233,0.8)', marginBottom: 8, fontWeight: 600 },
 };

@@ -865,10 +865,23 @@ function getTodayMYT() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
 }
 
+function getYesterdayMYT() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+}
+
 function getMonitorDateRange(range, dateStart, dateStop) {
-  const todayMYT = getTodayMYT();
+  const todayMYT     = getTodayMYT();
+  const yesterdayMYT = getYesterdayMYT();
   if (dateStart && dateStop) {
     return { dateStart, dateStop, rangeKey: `custom_${dateStart}_${dateStop}` };
+  }
+  if (range === 'today') {
+    return { dateStart: todayMYT, dateStop: todayMYT, rangeKey: 'today' };
+  }
+  if (range === 'yesterday') {
+    return { dateStart: yesterdayMYT, dateStop: yesterdayMYT, rangeKey: 'yesterday' };
   }
   if (range === 'this_month') {
     const myt   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -879,11 +892,12 @@ function getMonitorDateRange(range, dateStart, dateStop) {
       rangeKey:  'this_month'
     };
   }
-  const days = range === '7d' ? 7 : range === '14d' ? 14 : 30;
-  const start = new Date();
-  start.setDate(start.getDate() - (days - 1));
+  // 7d / 14d / 30d: dateStop = yesterday (exclude today's partial data)
+  const days  = range === '7d' ? 7 : range === '14d' ? 14 : 30;
+  const start = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  start.setDate(start.getDate() - days); // yesterday − (days−1) = days ago
   const dateStartStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
-  return { dateStart: dateStartStr, dateStop: todayMYT, rangeKey: range || '30d' };
+  return { dateStart: dateStartStr, dateStop: yesterdayMYT, rangeKey: range || '30d' };
 }
 
 function calcDays(dateStart, dateStop) {
@@ -1252,11 +1266,14 @@ app.get('/api/monitor/:clientId', async (req, res) => {
       await setMonitorCache(client.id, detailKey, detail);
     }
 
-    // Previous period (campaigns only — for comparison cards)
+    // Previous period (campaigns + daily for comparison lines)
     let prevDetail = await getMonitorCache(client.id, prevKey);
     if (!prevDetail) {
-      const campaigns = await fetchCampaignLevel(client, prev.dateStart, prev.dateStop);
-      prevDetail = { campaigns, fetchedAt: new Date().toISOString() };
+      const [campaigns, prevDaily] = await Promise.all([
+        fetchCampaignLevel(client, prev.dateStart, prev.dateStop),
+        fetchDailyTrend(client, prev.dateStart, prev.dateStop)
+      ]);
+      prevDetail = { campaigns, prevDaily, fetchedAt: new Date().toISOString() };
       await setMonitorCache(client.id, prevKey, prevDetail);
     }
 
@@ -1278,6 +1295,7 @@ app.get('/api/monitor/:clientId', async (req, res) => {
       adsets: detail.adsets,
       ads: detail.ads,
       daily: detail.daily,
+      prevDaily: prevDetail.prevDaily || [],
       dateStart, dateStop,
       prevDateStart: prev.dateStart, prevDateStop: prev.dateStop,
       rangeKey, cachedAt: detail.fetchedAt
@@ -1417,7 +1435,7 @@ app.get('/api/monitor/:clientId/actions', async (req, res) => {
     const actions = await db.collection('actions')
       .find({ clientId: req.params.clientId })
       .sort({ createdAt: -1 }).toArray();
-    res.json(actions.map(a => ({ ...a, _id: undefined })));
+    res.json(actions.map(a => ({ ...a, _id: undefined, replies: a.replies || [] })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1452,6 +1470,29 @@ app.put('/api/monitor/actions/:actionId', async (req, res) => {
     await db.collection('actions').updateOne({ id: req.params.actionId }, { $set: updates });
     const updated = await db.collection('actions').findOne({ id: req.params.actionId });
     res.json({ ...updated, _id: undefined });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/monitor/actions/:actionId/replies', async (req, res) => {
+  try {
+    const { message, attachments } = req.body;
+    if (!message?.trim() && (!attachments || attachments.length === 0))
+      return res.status(400).json({ error: 'Message or attachment required' });
+    if (!usingMongo()) return res.status(503).json({ error: 'No database' });
+    const reply = {
+      replyId:     uuidv4(),
+      message:     message || '',
+      author:      req.user.username,
+      createdAt:   new Date().toISOString(),
+      attachments: (attachments || []).map(a => ({ name: a.name, type: a.type, data: a.data }))
+    };
+    const db = await getDb();
+    const result = await db.collection('actions').updateOne(
+      { id: req.params.actionId },
+      { $push: { replies: reply }, $set: { updatedAt: new Date().toISOString() } }
+    );
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Action not found' });
+    res.json(reply);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

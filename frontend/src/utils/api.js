@@ -56,6 +56,7 @@ export const monitorAPI = {
   actions:      (id)                => api.get(`/monitor/${id}/actions`).then(r => r.data),
   addAction:    (id, body)          => api.post(`/monitor/${id}/actions`, body).then(r => r.data),
   updateAction: (actionId, body)    => api.put(`/monitor/actions/${actionId}`, body).then(r => r.data),
+  addReply:     (actionId, body)    => api.post(`/monitor/actions/${actionId}/replies`, body).then(r => r.data),
 };
 
 export const jobsAPI = {
