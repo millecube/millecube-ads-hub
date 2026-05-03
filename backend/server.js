@@ -509,6 +509,8 @@ async function sendAuthEmail(type, to, data) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { console.log(`[EMAIL] No RESEND_API_KEY — skipping ${type} email`); return; }
   if (!to) return;
+  // Until domain is verified on Resend, all auth emails go to the admin inbox
+  const effectiveTo = process.env.EMAIL_TO || 'hello@millecube.com';
   const resend = new Resend(apiKey);
   const from = process.env.EMAIL_FROM || 'Millecube Ads Hub <onboarding@resend.dev>';
   let subject, html;
@@ -554,9 +556,9 @@ async function sendAuthEmail(type, to, data) {
   }
 
   try {
-    const { data: d, error } = await resend.emails.send({ from, to, subject, html });
+    const { data: d, error } = await resend.emails.send({ from, to: effectiveTo, subject, html });
     if (error) console.error(`[EMAIL] ${type} rejected:`, JSON.stringify(error));
-    else console.log(`[EMAIL] ${type} sent OK — id: ${d.id}`);
+    else console.log(`[EMAIL] ${type} sent OK — id: ${d.id} → ${effectiveTo}`);
   } catch (err) {
     console.error(`[EMAIL] ${type} exception:`, err.message);
   }
