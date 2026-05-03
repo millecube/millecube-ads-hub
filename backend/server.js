@@ -127,6 +127,43 @@ async function saveUsers(users) {
   fs.writeJsonSync(USERS_FILE, clean, { spaces: 2 });
 }
 
+// ── Password Reset Tokens ──────────────────────────────────────────────────────
+const RESETS_FILE = path.join(DATA_DIR, 'password_resets.json');
+
+async function createPasswordReset(userId, email) {
+  const token = uuidv4();
+  const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+  if (usingMongo()) {
+    const db = await getDb();
+    await db.collection('passwordResets').deleteMany({ userId });
+    await db.collection('passwordResets').insertOne({ token, userId, email, expiresAt });
+  } else {
+    const resets = fs.existsSync(RESETS_FILE) ? fs.readJsonSync(RESETS_FILE) : [];
+    const filtered = resets.filter(r => r.userId !== userId);
+    fs.writeJsonSync(RESETS_FILE, [...filtered, { token, userId, email, expiresAt }], { spaces: 2 });
+  }
+  return token;
+}
+
+async function getPasswordReset(token) {
+  if (usingMongo()) {
+    const db = await getDb();
+    return db.collection('passwordResets').findOne({ token });
+  }
+  const resets = fs.existsSync(RESETS_FILE) ? fs.readJsonSync(RESETS_FILE) : [];
+  return resets.find(r => r.token === token) || null;
+}
+
+async function deletePasswordReset(token) {
+  if (usingMongo()) {
+    const db = await getDb();
+    await db.collection('passwordResets').deleteOne({ token });
+  } else {
+    const resets = fs.existsSync(RESETS_FILE) ? fs.readJsonSync(RESETS_FILE) : [];
+    fs.writeJsonSync(RESETS_FILE, resets.filter(r => r.token !== token), { spaces: 2 });
+  }
+}
+
 async function ensureDefaultUser() {
   const users = await getUsers();
   if (users.length === 0) {
@@ -177,6 +214,42 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ── Health (public — used by UptimeRobot) ─────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// ── Forgot / Reset Password (public) ──────────────────────────────────────────
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const users = await getUsers();
+    const user = users.find(u => u.email === email);
+    if (!user) return res.json({ ok: true }); // don't reveal if email exists
+    const token = await createPasswordReset(user.id, email);
+    const appUrl = process.env.FRONTEND_URL || 'https://millecube-ads-hub.vercel.app';
+    await sendAuthEmail('reset', email, { resetUrl: `${appUrl}/reset-password?token=${token}` });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ error: 'Token and password are required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const reset = await getPasswordReset(token);
+    if (!reset) return res.status(400).json({ error: 'Invalid or expired reset link' });
+    if (new Date(reset.expiresAt) < new Date()) {
+      await deletePasswordReset(token);
+      return res.status(400).json({ error: 'Reset link has expired. Please request a new one.' });
+    }
+    const users = await getUsers();
+    const idx = users.findIndex(u => u.id === reset.userId);
+    if (idx === -1) return res.status(400).json({ error: 'User not found' });
+    users[idx] = { ...users[idx], password: await bcrypt.hash(password, 10), updatedAt: new Date().toISOString() };
+    await saveUsers(users);
+    await deletePasswordReset(token);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ── Protect all remaining /api routes ─────────────────────────────────────────
 app.use('/api', authMiddleware);
@@ -249,6 +322,10 @@ app.post('/api/auth/users', requireAdmin, async (req, res) => {
       createdAt: new Date().toISOString()
     };
     await saveUsers([...users, newUser]);
+    if (newUser.email) {
+      const appUrl = process.env.FRONTEND_URL || 'https://millecube-ads-hub.vercel.app';
+      sendAuthEmail('welcome', newUser.email, { username, password, loginUrl: `${appUrl}/login` }).catch(() => {});
+    }
     res.json({ ok: true, user: { id: newUser.id, username, email: newUser.email, role: newUser.role, createdAt: newUser.createdAt } });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -425,6 +502,63 @@ async function sendReportEmail(client, periodLabel, status, fileName, driveUrl, 
     }
   } catch (err) {
     console.error('[EMAIL] Exception:', err.message);
+  }
+}
+
+async function sendAuthEmail(type, to, data) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) { console.log(`[EMAIL] No RESEND_API_KEY — skipping ${type} email`); return; }
+  if (!to) return;
+  const resend = new Resend(apiKey);
+  const from = process.env.EMAIL_FROM || 'Millecube Ads Hub <onboarding@resend.dev>';
+  let subject, html;
+
+  if (type === 'welcome') {
+    const { username, password, loginUrl } = data;
+    subject = 'Welcome to Millecube Ads Hub';
+    html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;color:#222">
+      <div style="background:#07503c;padding:24px 32px;border-radius:8px 8px 0 0">
+        <h1 style="color:#32cd32;margin:0;font-size:22px">Millecube Ads Hub</h1>
+        <p style="color:#aaa;margin:6px 0 0">Your account is ready</p>
+      </div>
+      <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+        <h2 style="color:#07503c;margin-top:0">Welcome, ${username}!</h2>
+        <p style="font-size:14px">An admin has created an account for you on Millecube Ads Hub. Here are your login details:</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0">
+          <tr style="background:#f5f5f5"><td style="padding:10px 14px;font-weight:bold;width:40%">Username</td><td style="padding:10px 14px;font-family:monospace">${username}</td></tr>
+          <tr><td style="padding:10px 14px;font-weight:bold">Password</td><td style="padding:10px 14px;font-family:monospace">${password}</td></tr>
+        </table>
+        <p style="margin:20px 0"><a href="${loginUrl}" style="background:#07503c;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Log In Now</a></p>
+        <p style="font-size:13px;color:#666">We recommend changing your password after your first login via Settings.</p>
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital &middot; Ads Hub &middot; Do not reply to this email</p>
+      </div>
+    </div>`;
+  } else if (type === 'reset') {
+    const { resetUrl } = data;
+    subject = 'Reset Your Password — Millecube Ads Hub';
+    html = `
+    <div style="font-family:Arial,sans-serif;max-width:600px;color:#222">
+      <div style="background:#07503c;padding:24px 32px;border-radius:8px 8px 0 0">
+        <h1 style="color:#32cd32;margin:0;font-size:22px">Millecube Ads Hub</h1>
+        <p style="color:#aaa;margin:6px 0 0">Password Reset Request</p>
+      </div>
+      <div style="padding:28px 32px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 8px 8px">
+        <h2 style="color:#07503c;margin-top:0">Reset Your Password</h2>
+        <p style="font-size:14px">We received a request to reset the password for your account. Click the button below to set a new password. This link expires in <strong>1 hour</strong>.</p>
+        <p style="margin:20px 0"><a href="${resetUrl}" style="background:#07503c;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">Reset Password</a></p>
+        <p style="font-size:13px;color:#666">If you did not request this, you can safely ignore this email. Your password will not change.</p>
+        <p style="font-size:12px;color:#aaa;margin-top:32px;border-top:1px solid #eee;padding-top:12px">Millecube Digital &middot; Ads Hub &middot; Do not reply to this email</p>
+      </div>
+    </div>`;
+  }
+
+  try {
+    const { data: d, error } = await resend.emails.send({ from, to, subject, html });
+    if (error) console.error(`[EMAIL] ${type} rejected:`, JSON.stringify(error));
+    else console.log(`[EMAIL] ${type} sent OK — id: ${d.id}`);
+  } catch (err) {
+    console.error(`[EMAIL] ${type} exception:`, err.message);
   }
 }
 

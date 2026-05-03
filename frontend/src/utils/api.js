@@ -72,6 +72,8 @@ export const authAPI = {
   listUsers:      ()     => api.get('/auth/users').then(r => r.data),
   createUser:     (data) => api.post('/auth/users', data).then(r => r.data),
   deleteUser:     (id)   => api.delete(`/auth/users/${id}`).then(r => r.data),
+  forgotPassword: (email)            => api.post('/auth/forgot-password', { email }).then(r => r.data),
+  resetPassword:  (token, password)  => api.post('/auth/reset-password', { token, password }).then(r => r.data),
 };
 
 export const budgetAPI = {

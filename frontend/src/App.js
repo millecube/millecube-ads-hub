@@ -10,6 +10,7 @@ import Settings    from './pages/Settings';
 import AdsMonitor    from './pages/AdsMonitor';
 import BudgetManager from './pages/BudgetManager';
 import Login         from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 import Header        from './components/Header';
 import { ToastProvider }   from './hooks/useToast';
 import { AuthProvider, useAuth }     from './context/AuthContext';
@@ -74,7 +75,8 @@ export default function App() {
           <ToastProvider>
             <BrowserRouter>
               <Routes>
-                <Route path="/login"      element={<PublicRoute><Login /></PublicRoute>} />
+                <Route path="/login"          element={<PublicRoute><Login /></PublicRoute>} />
+                <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/"           element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/monitor"    element={<ProtectedRoute><AdsMonitor /></ProtectedRoute>} />
                 <Route path="/clients"    element={<ProtectedRoute><Clients /></ProtectedRoute>} />
