@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { clientsAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
+import { useAuth } from '../context/AuthContext';
 
 const GOAL_OPTIONS = [
   { value: 'whatsapp',       label: 'WhatsApp Conversations' },
@@ -20,7 +21,7 @@ const DEFAULT_PATTERNS = [
   { pattern: 'LEAD',          goal: 'leads' },
 ];
 
-function ClientModal({ client, onClose, onSaved }) {
+function ClientModal({ client, onClose, onSaved, isAdmin }) {
   const toast = useToast();
   const isEdit = !!client;
 
@@ -99,7 +100,7 @@ function ClientModal({ client, onClose, onSaved }) {
                 <label className="form-label">Client Code *</label>
                 <input className="form-input" placeholder="e.g. VF, PF, MJ"
                   value={form.clientCode} onChange={e => set('clientCode', e.target.value.toUpperCase())}
-                  disabled={isEdit} maxLength={10} />
+                  disabled={isEdit && !isAdmin} maxLength={10} />
                 <span style={ms.hint}>Short unique code. Prefix for all report files.</span>
               </div>
               <div className="form-group">
@@ -203,6 +204,8 @@ function ClientModal({ client, onClose, onSaved }) {
 
 export default function Clients() {
   const toast = useToast();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal,   setModal]   = useState(null); // null | 'new' | clientObj
@@ -290,6 +293,7 @@ export default function Clients() {
           client={modal === 'new' ? null : modal}
           onClose={() => setModal(null)}
           onSaved={onSaved}
+          isAdmin={isAdmin}
         />
       )}
     </div>
