@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { authAPI, clientsAPI, budgetAPI } from '../utils/api';
+import { authAPI, clientsAPI, budgetAPI, settingsAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
 
 export default function Settings() {
@@ -27,6 +27,47 @@ export default function Settings() {
   const [budgetEditMap,  setBudgetEditMap]  = useState({});     // { userId: [clientId, ...] }
 
   const isAdmin = user?.role === 'admin';
+
+  // Logo
+  const [logo, setLogo]             = useState(null);
+  const [logoName, setLogoName]     = useState('');
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [savingLogo, setSavingLogo] = useState(false);
+  const logoInputRef = useRef(null);
+
+  useEffect(() => {
+    settingsAPI.get().then(d => { if (d.logo) { setLogo(d.logo); setLogoPreview(d.logo); setLogoName(d.logoName || ''); } }).catch(() => {});
+  }, []);
+
+  const handleLogoFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('Please select an image file.', 'error'); return; }
+    if (file.size > 2 * 1024 * 1024) { toast('Image must be under 2MB.', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => { setLogoPreview(ev.target.result); setLogo(ev.target.result); setLogoName(file.name); };
+    reader.readAsDataURL(file);
+  };
+
+  const saveLogo = async () => {
+    if (!logo) return;
+    setSavingLogo(true);
+    try {
+      await settingsAPI.uploadLogo(logo, logoName);
+      toast('Logo saved successfully.', 'success');
+    } catch (err) {
+      toast(err.response?.data?.error || 'Failed to save logo.', 'error');
+    } finally { setSavingLogo(false); }
+  };
+
+  const removeLogo = async () => {
+    if (!window.confirm('Remove the dashboard logo?')) return;
+    try {
+      await settingsAPI.deleteLogo();
+      setLogo(null); setLogoPreview(null); setLogoName('');
+      toast('Logo removed.', 'success');
+    } catch { toast('Failed to remove logo.', 'error'); }
+  };
 
   const loadTeam = useCallback(async () => {
     if (!isAdmin) return;
@@ -211,6 +252,46 @@ export default function Settings() {
             </button>
           </div>
         </div>
+
+        {/* Dashboard Logo (admin only) */}
+        {isAdmin && (
+          <div className="glass" style={s.card}>
+            <div style={s.cardTitle}>Dashboard Logo</div>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Displayed on the Dashboard page. PNG, JPG or SVG, max 2MB.
+            </p>
+
+            {/* Preview */}
+            <div style={{ marginBottom: 16 }}>
+              {logoPreview ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <img src={logoPreview} alt="logo preview" style={{ maxHeight: 80, maxWidth: 200, borderRadius: 8, border: '1px solid rgba(50,205,50,0.2)', background: 'rgba(255,255,255,0.05)', padding: 6, objectFit: 'contain' }} />
+                  <div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>{logoName}</div>
+                    <button onClick={removeLogo} style={{ ...s.dangerBtn, fontSize: 11, padding: '4px 10px' }}>Remove</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ width: 200, height: 80, borderRadius: 8, border: '2px dashed rgba(50,205,50,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
+                  No logo uploaded
+                </div>
+              )}
+            </div>
+
+            {/* Upload */}
+            <input ref={logoInputRef} type="file" accept="image/*" onChange={handleLogoFile} style={{ display: 'none' }} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => logoInputRef.current?.click()} style={s.btnSecondary}>
+                {logoPreview ? 'Change Image' : 'Upload Image'}
+              </button>
+              {logoPreview && (
+                <button onClick={saveLogo} disabled={savingLogo} style={s.btnPrimary}>
+                  {savingLogo ? 'Saving...' : 'Save Logo'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Profile */}
         <div className="glass" style={s.card}>
@@ -482,6 +563,9 @@ const s = {
   memberName:  { fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 },
   memberEmail: { fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 },
   roleBadge:   { fontSize: 10, fontWeight: 700, borderRadius: 6, padding: '2px 8px', display: 'inline-block' },
+  btnPrimary:  { padding: '8px 18px', borderRadius: 8, border: 'none', background: '#32cd32', color: '#03140e', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'Montserrat, sans-serif' },
+  btnSecondary:{ padding: '8px 18px', borderRadius: 8, border: '1px solid rgba(50,205,50,0.3)', background: 'rgba(50,205,50,0.08)', color: 'var(--text-primary)', fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'Montserrat, sans-serif' },
+  dangerBtn:   { padding: '6px 14px', borderRadius: 7, border: '1px solid rgba(220,50,50,0.35)', background: 'rgba(220,50,50,0.08)', color: '#e55', fontWeight: 600, fontSize: 12, cursor: 'pointer' },
 };
 
 const as = {

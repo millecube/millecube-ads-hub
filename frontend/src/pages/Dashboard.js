@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { clientsAPI, jobsAPI, schedulesAPI } from '../utils/api';
+import { clientsAPI, jobsAPI, schedulesAPI, settingsAPI } from '../utils/api';
 
 const statusColor = { done: '#32cd32', running: '#f5a623', failed: '#ff4d4d' };
 const statusLabel = { done: 'Done', running: 'Running', failed: 'Failed' };
@@ -9,10 +9,11 @@ export default function Dashboard() {
   const [jobs, setJobs]           = useState([]);
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading]     = useState(true);
+  const [logo, setLogo]           = useState(null);
 
   useEffect(() => {
-    Promise.all([clientsAPI.list(), jobsAPI.list({ limit: 20 }), schedulesAPI.list()])
-      .then(([c, j, s]) => { setClients(c); setJobs(j); setSchedules(s); })
+    Promise.all([clientsAPI.list(), jobsAPI.list({ limit: 20 }), schedulesAPI.list(), settingsAPI.get().catch(() => ({}))])
+      .then(([c, j, s, settings]) => { setClients(c); setJobs(j); setSchedules(s); if (settings?.logo) setLogo(settings.logo); })
       .finally(() => setLoading(false));
 
     // Poll jobs every 8s for live status
@@ -36,9 +37,14 @@ export default function Dashboard() {
   return (
     <div style={styles.page} className="fade-up">
       <div style={styles.header}>
-        <div>
-          <h1 style={styles.title}>Dashboard</h1>
-          <p style={styles.sub}>Meta Ads performance hub — Millecube Digital</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+          {logo && (
+            <img src={logo} alt="logo" style={{ maxHeight: 56, maxWidth: 160, objectFit: 'contain', borderRadius: 6 }} />
+          )}
+          <div>
+            <h1 style={styles.title}>Dashboard</h1>
+            <p style={styles.sub}>Meta Ads performance hub — Millecube Digital</p>
+          </div>
         </div>
         <div style={styles.liveDot}>
           <div style={styles.dot} />

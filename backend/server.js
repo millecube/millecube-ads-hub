@@ -2174,6 +2174,39 @@ cron.schedule('0 9 28-31 * *', async () => {
   } catch (err) { console.error('[BUDGET CRON] Error:', err.message); }
 }, { timezone: 'Asia/Kuala_Lumpur' });
 
+// ── Site Settings (logo etc.) ─────────────────────────────────────────────────
+app.get('/api/settings', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('siteSettings').findOne({ _id: 'main' });
+    res.json({ logo: doc?.logo || null, logoName: doc?.logoName || null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/settings/logo', requireAdmin, async (req, res) => {
+  try {
+    const { logo, logoName } = req.body;
+    if (!logo) return res.status(400).json({ error: 'No image provided' });
+    // Enforce ~2MB limit on base64 string
+    if (logo.length > 2_800_000) return res.status(400).json({ error: 'Image too large. Max ~2MB.' });
+    const db = await getDb();
+    await db.collection('siteSettings').updateOne(
+      { _id: 'main' },
+      { $set: { _id: 'main', logo, logoName: logoName || 'logo', updatedAt: new Date() } },
+      { upsert: true }
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/settings/logo', requireAdmin, async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.collection('siteSettings').updateOne({ _id: 'main' }, { $unset: { logo: '', logoName: '' } }, { upsert: true });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n🟢 Millecube Ads Hub Backend running on http://localhost:${PORT}`);
