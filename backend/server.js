@@ -1249,7 +1249,7 @@ async function fetchPerfCampaignLevel(client, dateStart, dateStop) {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
       level: 'campaign', limit: 500,
-      fields: ['campaign_name','campaign_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+      fields: ['campaign_name','campaign_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type','unique_actions','cost_per_unique_action_type'].join(',')
     }
   });
   return res.data.data || [];
@@ -1261,7 +1261,7 @@ async function fetchPerfAdsetLevel(client, dateStart, dateStop) {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
       level: 'adset', limit: 500,
-      fields: ['campaign_name','campaign_id','adset_name','adset_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+      fields: ['campaign_name','campaign_id','adset_name','adset_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type','unique_actions','cost_per_unique_action_type'].join(',')
     }
   });
   return res.data.data || [];
@@ -1273,7 +1273,7 @@ async function fetchPerfAdLevel2(client, dateStart, dateStop) {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
       level: 'ad', limit: 500,
-      fields: ['campaign_name','campaign_id','adset_name','adset_id','ad_name','ad_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+      fields: ['campaign_name','campaign_id','adset_name','adset_id','ad_name','ad_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type','unique_actions','cost_per_unique_action_type'].join(',')
     }
   });
   return res.data.data || [];
@@ -1314,7 +1314,11 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
     // ad set opt goal takes priority over campaign objective for result metric
     const resolveResults = (m, rawRow, optGoal) => {
       const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
-      const costPerResult = extractCostPerAction(rawRow?.cost_per_action_type, actionType);
+      // Prefer cost_per_unique_action_type (counts unique people, matches Ads Manager)
+      // Fall back to cost_per_action_type if unique is not available for this action type
+      const costPerResult =
+        extractCostPerAction(rawRow?.cost_per_unique_action_type, actionType) ||
+        extractCostPerAction(rawRow?.cost_per_action_type, actionType);
       const results = costPerResult > 0 ? Math.round(m.spend / costPerResult) : 0;
       return { results, costPerResult };
     };
@@ -1816,7 +1820,7 @@ app.get('/api/performance/table', async (req, res) => {
     }
     const clients = (await Promise.all(visible.map(async (client) => {
       try {
-        const cacheKey = `perf_v4_${rangeKey}`;
+        const cacheKey = `perf_v5_${rangeKey}`;
         let cached = await getMonitorCache(client.id, cacheKey);
         if (!cached) {
           const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
