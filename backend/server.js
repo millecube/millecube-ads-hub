@@ -95,7 +95,7 @@ async function writeJobs(data) {
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 app.use('/reports', express.static(REPORTS_DIR));
 
 // ── Auth Helpers (multi-user) ──────────────────────────────────────────────────
@@ -214,6 +214,15 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ── Health (public — used by UptimeRobot) ─────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// ── Site Settings — GET is public so favicon loads before login ───────────────
+app.get('/api/settings/public', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('siteSettings').findOne({ _id: 'main' });
+    res.json({ logo: doc?.logo || null });
+  } catch { res.json({ logo: null }); }
+});
 
 // ── Forgot / Reset Password (public) ──────────────────────────────────────────
 app.post('/api/auth/forgot-password', async (req, res) => {
@@ -2187,8 +2196,8 @@ app.post('/api/settings/logo', requireAdmin, async (req, res) => {
   try {
     const { logo, logoName } = req.body;
     if (!logo) return res.status(400).json({ error: 'No image provided' });
-    // Enforce ~2MB limit on base64 string
-    if (logo.length > 2_800_000) return res.status(400).json({ error: 'Image too large. Max ~2MB.' });
+    // Enforce ~10MB limit on base64 string (~13.3MB encoded)
+    if (logo.length > 13_500_000) return res.status(400).json({ error: 'Image too large. Max ~10MB.' });
     const db = await getDb();
     await db.collection('siteSettings').updateOne(
       { _id: 'main' },

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { settingsAPI } from './utils/api';
 import Sidebar    from './components/Sidebar';
 import Dashboard  from './pages/Dashboard';
 import Clients    from './pages/Clients';
@@ -68,6 +69,18 @@ function PublicRoute({ children }) {
   return children;
 }
 
+function FaviconLoader() {
+  useEffect(() => {
+    // Use public endpoint so favicon loads even before login
+    settingsAPI.getPublic().then(({ logo }) => {
+      if (!logo) return;
+      const link = document.getElementById('app-favicon');
+      if (link) link.href = logo;
+    }).catch(() => {});
+  }, []);
+  return null;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -75,6 +88,7 @@ export default function App() {
         <SidebarProvider>
           <ToastProvider>
             <BrowserRouter>
+              <FaviconLoader />
               <Routes>
                 <Route path="/login"          element={<PublicRoute><Login /></PublicRoute>} />
                 <Route path="/reset-password" element={<ResetPassword />} />

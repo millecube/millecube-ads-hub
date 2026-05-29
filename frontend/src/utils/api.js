@@ -97,6 +97,7 @@ export const prefsAPI = {
 
 export const settingsAPI = {
   get:         ()              => api.get('/settings').then(r => r.data),
+  getPublic:   ()              => api.get('/settings/public').then(r => r.data),
   uploadLogo:  (logo, name)    => api.post('/settings/logo', { logo, logoName: name }).then(r => r.data),
   deleteLogo:  ()              => api.delete('/settings/logo').then(r => r.data),
 };

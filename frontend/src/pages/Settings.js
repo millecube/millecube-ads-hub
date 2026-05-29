@@ -43,7 +43,7 @@ export default function Settings() {
     const file = e.target.files[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast('Please select an image file.', 'error'); return; }
-    if (file.size > 2 * 1024 * 1024) { toast('Image must be under 2MB.', 'error'); return; }
+    if (file.size > 10 * 1024 * 1024) { toast('Image must be under 10MB.', 'error'); return; }
     const reader = new FileReader();
     reader.onload = (ev) => { setLogoPreview(ev.target.result); setLogo(ev.target.result); setLogoName(file.name); };
     reader.readAsDataURL(file);
@@ -258,7 +258,7 @@ export default function Settings() {
           <div className="glass" style={s.card}>
             <div style={s.cardTitle}>Dashboard Logo</div>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
-              Displayed on the Dashboard page. PNG, JPG or SVG, max 2MB.
+              Displayed on the Dashboard page and browser tab icon. PNG, JPG or SVG, max 10MB.
             </p>
 
             {/* Preview */}
