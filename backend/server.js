@@ -994,6 +994,12 @@ function extractAction(actions, type) {
   return f ? parseFloat(f.value || 0) : 0;
 }
 
+function extractCostPerAction(costArr, type) {
+  if (!costArr) return 0;
+  const f = (Array.isArray(costArr) ? costArr : []).find(a => a.action_type === type);
+  return f ? parseFloat(f.value || 0) : 0;
+}
+
 const MONITOR_TTL_MS = 30 * 60 * 1000;
 const BENCH_DEFAULTS = { ctr: 0.8, cpm: 25, cpr: 50, frequency: 3.5 };
 
@@ -1282,20 +1288,23 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
   return campIns.map(c => {
     const cs = campMap[c.campaign_id] || {};
     const objective = cs.objective || '';
-    const resolveResults = (m) => {
+    const resolveResults = (m, rawRow) => {
       const obj = objective.toUpperCase();
+      let actionType;
       if (obj.includes('LEAD'))
-        return { results: m.leads, costPerResult: m.leads > 0 ? m.spend / m.leads : 0 };
-      if (obj === 'MESSAGES' || obj === 'OUTCOME_ENGAGEMENT_MESSAGING')
-        return { results: m.waConvosStarted, costPerResult: m.waConvosStarted > 0 ? m.spend / m.waConvosStarted : 0 };
-      if (obj.includes('POST_ENGAGEMENT') || obj.includes('ENGAGEMENT'))
-        return { results: m.postEngagement, costPerResult: m.postEngagement > 0 ? m.spend / m.postEngagement : 0 };
-      if (obj.includes('VIDEO'))
-        return { results: m.videoViews, costPerResult: m.videoViews > 0 ? m.spend / m.videoViews : 0 };
-      if (obj.includes('TRAFFIC') || obj.includes('LINK_CLICK'))
-        return { results: m.linkClicks, costPerResult: m.linkClicks > 0 ? m.spend / m.linkClicks : 0 };
-      // Default: messaging conversations started
-      return { results: m.waConvosStarted, costPerResult: m.waConvosStarted > 0 ? m.spend / m.waConvosStarted : 0 };
+        actionType = 'lead';
+      else if (obj.includes('POST_ENGAGEMENT') || (obj.includes('ENGAGEMENT') && !obj.includes('MESSAGING')))
+        actionType = 'post_engagement';
+      else if (obj.includes('VIDEO'))
+        actionType = 'video_view';
+      else if (obj.includes('TRAFFIC') || obj.includes('LINK_CLICK'))
+        actionType = 'link_click';
+      else
+        actionType = 'onsite_conversion.messaging_conversation_started_7d';
+      // Use cost_per_action_type from Meta API directly — matches Ads Manager exactly
+      const costPerResult = extractCostPerAction(rawRow?.cost_per_action_type, actionType);
+      const results = costPerResult > 0 ? Math.round(m.spend / costPerResult) : 0;
+      return { results, costPerResult };
     };
 
     const adsets = (adsetByCamp[c.campaign_id] || []).map(a => {
@@ -1304,7 +1313,7 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
       const ads = (adByAdset[a.adset_id] || []).map(ad => {
         const ads2 = adMap[ad.ad_id] || {};
         const adMetrics = extractPerfMetrics(ad);
-        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...adMetrics, ...resolveResults(adMetrics) };
+        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...adMetrics, ...resolveResults(adMetrics, ad) };
       });
       const db = parseBudget(as2.daily_budget), lb = parseBudget(as2.lifetime_budget);
       return {
@@ -1314,7 +1323,7 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
         billing_event: as2.billing_event || '',
         targeting: as2.targeting || null,
         budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
-        ...aMetrics, ...resolveResults(aMetrics), ads
+        ...aMetrics, ...resolveResults(aMetrics, a), ads
       };
     });
     const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
@@ -1324,7 +1333,7 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
       status: cs.effective_status || 'UNKNOWN',
       objective,
       budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
-      ...cMetrics, ...resolveResults(cMetrics), adsets
+      ...cMetrics, ...resolveResults(cMetrics, c), adsets
     };
   });
 }
@@ -1791,7 +1800,7 @@ app.get('/api/performance/table', async (req, res) => {
     }
     const clients = (await Promise.all(visible.map(async (client) => {
       try {
-        const cacheKey = `perf_v2_${rangeKey}`;
+        const cacheKey = `perf_v3_${rangeKey}`;
         let cached = await getMonitorCache(client.id, cacheKey);
         if (!cached) {
           const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([

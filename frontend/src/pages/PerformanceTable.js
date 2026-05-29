@@ -28,6 +28,9 @@ const DEFAULT_COLS = [
 
 const DEFAULT_COL_ORDER = DEFAULT_COLS.map(c => c.key);
 
+const saveAllColOrder = (order) => localStorage.setItem('perf_all_col_order', JSON.stringify(order));
+const saveVisibleCols = (set) => localStorage.setItem('perf_visible_cols', JSON.stringify([...set]));
+
 function fmtNum(n) {
   const v = parseFloat(n || 0);
   if (v >= 1000000) return (v / 1000000).toFixed(1) + 'M';
@@ -167,17 +170,47 @@ export default function PerformanceTable() {
   const [sortDir, setSortDir] = useState('desc');
   const [toggling, setToggling] = useState(new Set());
 
-  const [colOrder, setColOrder] = useState(() => {
+  // allColOrder = full ordered list of all columns (visible + hidden)
+  const [allColOrder, setAllColOrder] = useState(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem('perf_col_order'));
-      if (!saved) return DEFAULT_COL_ORDER;
-      const missing = DEFAULT_COL_ORDER.filter(k => !saved.includes(k));
-      return missing.length ? [...saved, ...missing] : saved;
+      const saved = JSON.parse(localStorage.getItem('perf_all_col_order'));
+      if (saved) {
+        const missing = DEFAULT_COL_ORDER.filter(k => !saved.includes(k));
+        return missing.length ? [...saved, ...missing] : saved;
+      }
+      // migrate from old key
+      const old = JSON.parse(localStorage.getItem('perf_col_order'));
+      if (old) {
+        const missing = DEFAULT_COL_ORDER.filter(k => !old.includes(k));
+        return missing.length ? [...old, ...missing] : old;
+      }
+      return DEFAULT_COL_ORDER;
     } catch { return DEFAULT_COL_ORDER; }
+  });
+  // visibleCols = Set of column keys currently shown in the table
+  const [visibleCols, setVisibleCols] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('perf_visible_cols'));
+      if (saved) return new Set(saved);
+      const old = JSON.parse(localStorage.getItem('perf_col_order'));
+      if (old) return new Set(old);
+      return new Set(DEFAULT_COL_ORDER);
+    } catch { return new Set(DEFAULT_COL_ORDER); }
   });
   const [colWidths, setColWidths] = useState(() => {
     try { return JSON.parse(localStorage.getItem('perf_col_widths')) || {}; } catch { return {}; }
   });
+
+  // Saved column views
+  const [savedViews, setSavedViews] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('perf_saved_views')) || []; } catch { return []; }
+  });
+  const [colPanelOpen, setColPanelOpen] = useState(false);
+  const [panelDragIdx, setPanelDragIdx] = useState(null);
+  const [panelDragOverIdx, setPanelDragOverIdx] = useState(null);
+
+  // Derived: visible columns in order (used for table rendering)
+  const colOrder = allColOrder.filter(k => visibleCols.has(k));
 
   const dragColRef = useRef(null);
   const dragOverColRef = useRef(null);
@@ -226,13 +259,13 @@ export default function PerformanceTable() {
     const from = dragColRef.current;
     const to = dragOverColRef.current;
     if (!from || !to || from === to) return;
-    setColOrder(prev => {
+    setAllColOrder(prev => {
       const next = [...prev];
       const fi = next.indexOf(from);
       const ti = next.indexOf(to);
       next.splice(fi, 1);
       next.splice(ti, 0, from);
-      localStorage.setItem('perf_col_order', JSON.stringify(next));
+      localStorage.setItem('perf_all_col_order', JSON.stringify(next));
       return next;
     });
     dragColRef.current = null;
@@ -293,6 +326,67 @@ export default function PerformanceTable() {
     setSortCol(prev => {
       if (prev === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); return col; }
       setSortDir('desc'); return col;
+    });
+  }, []);
+
+  // Column panel handlers
+  const toggleColVisible = useCallback((key) => {
+    setVisibleCols(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      saveVisibleCols(next);
+      return next;
+    });
+  }, []);
+
+  const handlePanelDragStart = useCallback((idx) => setPanelDragIdx(idx), []);
+  const handlePanelDragOver = useCallback((e, idx) => { e.preventDefault(); setPanelDragOverIdx(idx); }, []);
+  const handlePanelDrop = useCallback(() => {
+    if (panelDragIdx == null || panelDragOverIdx == null || panelDragIdx === panelDragOverIdx) return;
+    setAllColOrder(prev => {
+      const next = [...prev];
+      const [removed] = next.splice(panelDragIdx, 1);
+      next.splice(panelDragOverIdx, 0, removed);
+      saveAllColOrder(next);
+      return next;
+    });
+    setPanelDragIdx(null);
+    setPanelDragOverIdx(null);
+  }, [panelDragIdx, panelDragOverIdx]);
+
+  const saveView = useCallback((name) => {
+    const view = { name, allColOrder, visibleCols: [...visibleCols] };
+    setSavedViews(prev => {
+      const idx = prev.findIndex(v => v.name === name);
+      const next = idx >= 0 ? [...prev.slice(0, idx), view, ...prev.slice(idx + 1)] : [...prev, view];
+      localStorage.setItem('perf_saved_views', JSON.stringify(next));
+      return next;
+    });
+  }, [allColOrder, visibleCols]);
+
+  const loadView = useCallback((name) => {
+    if (name === '__default__') {
+      setAllColOrder(DEFAULT_COL_ORDER);
+      setVisibleCols(new Set(DEFAULT_COL_ORDER));
+      saveAllColOrder(DEFAULT_COL_ORDER);
+      saveVisibleCols(new Set(DEFAULT_COL_ORDER));
+      return;
+    }
+    const view = savedViews.find(v => v.name === name);
+    if (!view) return;
+    const ord = view.allColOrder;
+    const vis = new Set(view.visibleCols);
+    setAllColOrder(ord);
+    setVisibleCols(vis);
+    saveAllColOrder(ord);
+    saveVisibleCols(vis);
+  }, [savedViews]);
+
+  const deleteView = useCallback((name) => {
+    setSavedViews(prev => {
+      const next = prev.filter(v => v.name !== name);
+      localStorage.setItem('perf_saved_views', JSON.stringify(next));
+      return next;
     });
   }, []);
 
@@ -513,6 +607,11 @@ export default function PerformanceTable() {
           style={{ padding: '7px 12px', fontSize: 12, width: 180 }}
         />
 
+        {/* Columns */}
+        <button onClick={() => setColPanelOpen(v => !v)} style={{ ...st.filterBtn, background: colPanelOpen ? 'rgba(50,205,50,0.15)' : 'rgba(50,205,50,0.06)' }}>
+          ⚙ Columns
+        </button>
+
         {/* Refresh */}
         <button onClick={fetchData} style={st.filterBtn} disabled={loading}>
           {loading ? '...' : '↻ Refresh'}
@@ -686,6 +785,97 @@ export default function PerformanceTable() {
       )}
 
       {infoPopup && <InfoPopup row={infoPopup} onClose={() => setInfoPopup(null)} />}
+
+      {/* Column customiser panel */}
+      {colPanelOpen && (
+        <div onClick={() => setColPanelOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 300 }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            position: 'fixed', top: 0, right: 0, bottom: 0, width: 290,
+            background: 'var(--card-bg, #0a1f15)', borderLeft: '1px solid rgba(50,205,50,0.2)',
+            display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)', zIndex: 301,
+          }}>
+            {/* Panel header */}
+            <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(50,205,50,0.12)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)', fontFamily: 'Montserrat' }}>Customise Columns</span>
+              <button onClick={() => setColPanelOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>&#x2715;</button>
+            </div>
+
+            {/* Saved views */}
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(50,205,50,0.08)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Saved Views</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button onClick={() => loadView('__default__')} style={{ ...st.rangeBtn, fontSize: 10, padding: '4px 10px' }}>Default</button>
+                {savedViews.map(v => (
+                  <div key={v.name} style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                    <button onClick={() => loadView(v.name)} style={{ ...st.rangeBtn, fontSize: 10, padding: '4px 10px' }}>{v.name}</button>
+                    <button onClick={() => deleteView(v.name)} style={{ background: 'none', border: 'none', color: 'rgba(255,100,100,0.5)', cursor: 'pointer', fontSize: 11, padding: '2px 4px' }}>&#x2715;</button>
+                  </div>
+                ))}
+                <button onClick={() => {
+                  const name = window.prompt('Save current view as:');
+                  if (name?.trim()) saveView(name.trim());
+                }} style={{ ...st.rangeBtn, fontSize: 10, padding: '4px 10px', color: '#32cd32', borderColor: 'rgba(50,205,50,0.35)' }}>
+                  + Save View
+                </button>
+              </div>
+            </div>
+
+            {/* Column list */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 12px' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, paddingLeft: 4 }}>
+                Columns — drag to reorder
+              </div>
+              {allColOrder.map((key, idx) => {
+                const col = colDefs[key];
+                if (!col) return null;
+                const isVisible = visibleCols.has(key);
+                const isDragTarget = panelDragOverIdx === idx;
+                return (
+                  <div
+                    key={key}
+                    draggable
+                    onDragStart={() => handlePanelDragStart(idx)}
+                    onDragOver={e => handlePanelDragOver(e, idx)}
+                    onDrop={handlePanelDrop}
+                    onDragEnd={() => { setPanelDragIdx(null); setPanelDragOverIdx(null); }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '7px 8px',
+                      borderRadius: 6, marginBottom: 2, cursor: 'grab',
+                      background: isDragTarget ? 'rgba(50,205,50,0.1)' : 'transparent',
+                      border: isDragTarget ? '1px solid rgba(50,205,50,0.25)' : '1px solid transparent',
+                      opacity: isVisible ? 1 : 0.45,
+                      transition: 'background 0.1s',
+                    }}
+                  >
+                    <span style={{ color: 'var(--text-muted)', fontSize: 13, userSelect: 'none', lineHeight: 1 }}>&#x2630;</span>
+                    <div
+                      onClick={() => toggleColVisible(key)}
+                      style={{
+                        width: 16, height: 16, borderRadius: 4, border: `1.5px solid ${isVisible ? '#32cd32' : 'rgba(50,205,50,0.3)'}`,
+                        background: isVisible ? '#32cd32' : 'transparent', cursor: 'pointer', flexShrink: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s',
+                      }}
+                    >
+                      {isVisible && <span style={{ fontSize: 9, color: '#03140e', fontWeight: 900, lineHeight: 1 }}>&#x2713;</span>}
+                    </div>
+                    <span style={{ fontSize: 12, color: 'var(--text-primary)', flex: 1, userSelect: 'none' }}>{col.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Reset footer */}
+            <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(50,205,50,0.08)' }}>
+              <button
+                onClick={() => { setAllColOrder(DEFAULT_COL_ORDER); setVisibleCols(new Set(DEFAULT_COL_ORDER)); saveAllColOrder(DEFAULT_COL_ORDER); saveVisibleCols(new Set(DEFAULT_COL_ORDER)); }}
+                style={{ ...st.filterBtn, width: '100%', fontSize: 11, textAlign: 'center' }}
+              >
+                Reset to Default
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
