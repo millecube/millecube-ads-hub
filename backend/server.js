@@ -1195,6 +1195,9 @@ function extractPerfMetrics(row) {
   const repliedMessages   = extractAction(row.actions, 'onsite_conversion.messaging_first_reply');
   const newContacts       = extractAction(row.actions, 'onsite_conversion.messaging_new_connections');
   const returningContacts = extractAction(row.actions, 'onsite_conversion.messaging_returning_connections');
+  const leads             = extractAction(row.actions, 'lead');
+  const postEngagement    = extractAction(row.actions, 'post_engagement');
+  const videoViews        = extractAction(row.actions, 'video_view');
   return {
     spend, impressions, reach,
     frequency: reach > 0 ? impressions / reach : 0,
@@ -1207,6 +1210,7 @@ function extractPerfMetrics(row) {
     cpcLink: linkClicks > 0  ? spend / linkClicks : 0,
     costPerMessage: repliedMessages > 0 ? spend / repliedMessages : 0,
     waConvosStarted, repliedMessages, newContacts, returningContacts,
+    leads, postEngagement, videoViews,
   };
 }
 
@@ -1255,7 +1259,7 @@ async function fetchCampaignStructure(client) {
 
 async function fetchAdsetStructure(client) {
   const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/adsets`, {
-    params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,campaign_id', limit: 500 }
+    params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,campaign_id,optimization_goal,billing_event,targeting', limit: 500 }
   });
   return res.data.data || [];
 }
@@ -1273,20 +1277,45 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
   const adMap = {}; adStruct.forEach(a => { adMap[a.id] = a; });
   const adsetByCamp = {}; adsetIns.forEach(a => { (adsetByCamp[a.campaign_id] = adsetByCamp[a.campaign_id] || []).push(a); });
   const adByAdset = {}; adIns.forEach(a => { (adByAdset[a.adset_id] = adByAdset[a.adset_id] || []).push(a); });
-  const parseBudget = s => { const n = parseFloat(s || 0); return n > 0 ? n : null; };
+  const parseBudget = s => { const n = parseFloat(s || 0); return n > 0 ? n / 100 : null; };
+
   return campIns.map(c => {
     const cs = campMap[c.campaign_id] || {};
+    const objective = cs.objective || '';
+    const resolveResults = (m) => {
+      if (objective.includes('LEAD')) return { results: m.leads, costPerResult: m.leads > 0 ? m.spend / m.leads : 0 };
+      if (objective.includes('ENGAGEMENT') || objective.includes('POST')) return { results: m.postEngagement, costPerResult: m.postEngagement > 0 ? m.spend / m.postEngagement : 0 };
+      return { results: m.repliedMessages, costPerResult: m.repliedMessages > 0 ? m.spend / m.repliedMessages : 0 };
+    };
+
     const adsets = (adsetByCamp[c.campaign_id] || []).map(a => {
       const as2 = adsetMap[a.adset_id] || {};
+      const aMetrics = extractPerfMetrics(a);
       const ads = (adByAdset[a.adset_id] || []).map(ad => {
         const ads2 = adMap[ad.ad_id] || {};
-        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...extractPerfMetrics(ad) };
+        const adMetrics = extractPerfMetrics(ad);
+        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...adMetrics, ...resolveResults(adMetrics) };
       });
       const db = parseBudget(as2.daily_budget), lb = parseBudget(as2.lifetime_budget);
-      return { id: a.adset_id, name: a.adset_name, status: as2.effective_status || 'UNKNOWN', budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null, ...extractPerfMetrics(a), ads };
+      return {
+        id: a.adset_id, name: a.adset_name,
+        status: as2.effective_status || 'UNKNOWN',
+        optimization_goal: as2.optimization_goal || '',
+        billing_event: as2.billing_event || '',
+        targeting: as2.targeting || null,
+        budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
+        ...aMetrics, ...resolveResults(aMetrics), ads
+      };
     });
     const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
-    return { id: c.campaign_id, name: c.campaign_name, status: cs.effective_status || 'UNKNOWN', objective: cs.objective || '', budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null, ...extractPerfMetrics(c), adsets };
+    const cMetrics = extractPerfMetrics(c);
+    return {
+      id: c.campaign_id, name: c.campaign_name,
+      status: cs.effective_status || 'UNKNOWN',
+      objective,
+      budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
+      ...cMetrics, ...resolveResults(cMetrics), adsets
+    };
   });
 }
 
@@ -1750,23 +1779,28 @@ app.get('/api/performance/table', async (req, res) => {
       const ids = clientIds.split(',');
       visible = visible.filter(c => ids.includes(c.id));
     }
-    const clients = await Promise.all(visible.map(async (client) => {
-      const cacheKey = `perf_v1_${rangeKey}`;
-      let cached = await getMonitorCache(client.id, cacheKey);
-      if (!cached) {
-        const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
-          fetchPerfCampaignLevel(client, dateStart, dateStop),
-          fetchPerfAdsetLevel(client, dateStart, dateStop),
-          fetchPerfAdLevel2(client, dateStart, dateStop),
-          fetchCampaignStructure(client).catch(() => []),
-          fetchAdsetStructure(client).catch(() => []),
-          fetchAdStructure(client).catch(() => []),
-        ]);
-        cached = { campaigns: buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct), fetchedAt: new Date().toISOString() };
-        await setMonitorCache(client.id, cacheKey, cached);
+    const clients = (await Promise.all(visible.map(async (client) => {
+      try {
+        const cacheKey = `perf_v1_${rangeKey}`;
+        let cached = await getMonitorCache(client.id, cacheKey);
+        if (!cached) {
+          const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
+            fetchPerfCampaignLevel(client, dateStart, dateStop).catch(() => []),
+            fetchPerfAdsetLevel(client, dateStart, dateStop).catch(() => []),
+            fetchPerfAdLevel2(client, dateStart, dateStop).catch(() => []),
+            fetchCampaignStructure(client).catch(() => []),
+            fetchAdsetStructure(client).catch(() => []),
+            fetchAdStructure(client).catch(() => []),
+          ]);
+          cached = { campaigns: buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct), fetchedAt: new Date().toISOString() };
+          await setMonitorCache(client.id, cacheKey, cached);
+        }
+        return { clientId: client.id, clientCode: client.clientCode, clientName: client.name, campaigns: cached.campaigns || [] };
+      } catch (err) {
+        console.error(`[PERF] Failed for client ${client.clientCode}:`, err.message);
+        return { clientId: client.id, clientCode: client.clientCode, clientName: client.name, campaigns: [], error: err.message };
       }
-      return { clientId: client.id, clientCode: client.clientCode, clientName: client.name, campaigns: cached.campaigns || [] };
-    }));
+    }))).filter(Boolean);
     res.json({ clients, dateStart, dateStop });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

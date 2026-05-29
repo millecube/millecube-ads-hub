@@ -22,6 +22,8 @@ const DEFAULT_COLS = [
   { key: 'repliedMessages',   label: 'Replied Msgs',    width: 120 },
   { key: 'newContacts',       label: 'New Contacts',    width: 120 },
   { key: 'returningContacts', label: 'Return Contacts', width: 130 },
+  { key: 'results',           label: 'Results',         width: 100 },
+  { key: 'costPerResult',     label: 'Cost/Result',     width: 110 },
 ];
 
 const DEFAULT_COL_ORDER = DEFAULT_COLS.map(c => c.key);
@@ -79,6 +81,47 @@ function ColorNum({ value, fmt, low, high, higherBetter }) {
   return <span style={{ color, fontWeight: 600 }}>{fmt ? fmt(v) : v}</span>;
 }
 
+function InfoPopup({ row, onClose }) {
+  if (!row) return null;
+  const items = [];
+  if (row.level === 0) {
+    items.push(['Objective', row.objective || '—']);
+  } else if (row.level === 1) {
+    items.push(['Optimization Goal', row.optimization_goal || '—']);
+    items.push(['Billing Event', row.billing_event || '—']);
+    if (row.budget) items.push(['Budget', `RM ${row.budget.amount?.toFixed(2)} /${row.budget.type === 'daily' ? 'day' : 'total'}`]);
+    if (row.targeting) {
+      const t = row.targeting;
+      if (t.age_min || t.age_max) items.push(['Age', `${t.age_min || 18}–${t.age_max || 65}`]);
+      if (t.genders?.length) items.push(['Gender', t.genders.map(g => g === 1 ? 'Male' : 'Female').join(', ')]);
+      const locCount = (t.geo_locations?.cities?.length || 0) + (t.geo_locations?.regions?.length || 0) + (t.geo_locations?.countries?.length || 0);
+      if (locCount > 0) items.push(['Locations', `${locCount} location(s)`]);
+      const intCount = t.flexible_spec?.reduce((s, g) => s + (g.interests?.length || 0), 0) || 0;
+      if (intCount > 0) items.push(['Interests', `${intCount} interest(s)`]);
+    }
+  }
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200 }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        position: 'absolute', top: 8, right: 8,
+        background: '#03140e', border: '1px solid rgba(50,205,50,0.25)', borderRadius: 10,
+        padding: '14px 16px', minWidth: 220, boxShadow: '0 8px 32px rgba(0,0,0,0.6)', zIndex: 201,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#32cd32', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>
+          {row.level === 0 ? 'Campaign Info' : 'Ad Set Info'}
+        </div>
+        {items.map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6, fontSize: 12 }}>
+            <span style={{ color: 'rgba(232,245,233,0.5)', flexShrink: 0 }}>{k}</span>
+            <span style={{ color: 'var(--text-primary)', textAlign: 'right', wordBreak: 'break-word' }}>{v}</span>
+          </div>
+        ))}
+        <button onClick={onClose} style={{ marginTop: 8, background: 'none', border: 'none', color: 'rgba(232,245,233,0.4)', cursor: 'pointer', fontSize: 11 }}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 function updateRowStatus(data, clientId, objectId, newStatus) {
   if (!data) return data;
   return {
@@ -109,8 +152,9 @@ export default function PerformanceTable() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [clientList, setClientList] = useState([]);
-  const [selectedClients, setSelectedClients] = useState([]);
+  const [selectedClient, setSelectedClient] = useState(null);
   const [clientDropOpen, setClientDropOpen] = useState(false);
+  const [infoPopup, setInfoPopup] = useState(null);
 
   const [range, setRange] = useState('7d');
   const [customStart, setCustomStart] = useState('');
@@ -140,18 +184,19 @@ export default function PerformanceTable() {
       try {
         const list = user?.role === 'admin' ? await clientsAPI.list() : await clientsAPI.getAssigned();
         setClientList(list);
-        setSelectedClients(list.map(c => c.id));
+        setSelectedClient(list[0]?.id || null);
       } catch {}
     })();
   }, [user]);
 
   // Fetch data when filters change
   const fetchData = useCallback(async () => {
-    if (selectedClients.length === 0) return;
+    if (!selectedClient) return;
     setLoading(true);
     setError('');
     try {
-      const params = { clientIds: selectedClients.join(',') };
+      const params = {};
+      params.clientIds = selectedClient;
       if (range !== 'custom') {
         params.range = range;
       } else if (customStart && customEnd) {
@@ -165,7 +210,7 @@ export default function PerformanceTable() {
     } finally {
       setLoading(false);
     }
-  }, [range, customStart, customEnd, selectedClients]);
+  }, [range, customStart, customEnd, selectedClient]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -246,40 +291,76 @@ export default function PerformanceTable() {
     });
   }, []);
 
-  // Flatten hierarchy for rendering
+  // Flatten hierarchy for rendering with hierarchical sorting
   const flatRows = useMemo(() => {
     if (!data) return [];
     const rows = [];
     const sq = search.toLowerCase();
-    data.clients.forEach(c => {
-      c.campaigns.forEach(camp => {
-        if (statusFilter !== 'all' && camp.status.toLowerCase() !== statusFilter) return;
-        if (sq && !camp.name.toLowerCase().includes(sq)) return;
-        const campKey = `c_${camp.id}`;
-        rows.push({ ...camp, _rowKey: campKey, _clientId: c.clientId, _clientCode: c.clientCode, _clientName: c.clientName, level: 0 });
-        if (expanded.has(campKey)) {
-          camp.adsets.forEach(adset => {
-            if (statusFilter !== 'all' && adset.status.toLowerCase() !== statusFilter) return;
-            const adsetKey = `a_${adset.id}`;
-            rows.push({ ...adset, _rowKey: adsetKey, _clientId: c.clientId, _clientCode: c.clientCode, level: 1 });
-            if (expanded.has(adsetKey)) {
-              adset.ads.forEach(ad => {
-                if (statusFilter !== 'all' && ad.status.toLowerCase() !== statusFilter) return;
-                rows.push({ ...ad, _rowKey: `ad_${ad.id}`, _clientId: c.clientId, _clientCode: c.clientCode, level: 2 });
-              });
-            }
-          });
-        }
-      });
-    });
-    if (sortCol) {
-      rows.sort((a, b) => {
-        const av = a[sortCol] ?? 0;
-        const bv = b[sortCol] ?? 0;
+
+    const sortArr = (arr) => {
+      if (!sortCol) return arr;
+      return [...arr].sort((a, b) => {
+        const av = a[sortCol] ?? (typeof a[sortCol] === 'string' ? '' : 0);
+        const bv = b[sortCol] ?? (typeof b[sortCol] === 'string' ? '' : 0);
         if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
         return sortDir === 'asc' ? av - bv : bv - av;
       });
-    }
+    };
+
+    const clientData = data.clients[0];
+    if (!clientData) return [];
+
+    const campaigns = sortArr(clientData.campaigns.filter(camp => {
+      if (statusFilter !== 'all' && camp.status.toLowerCase() !== statusFilter) return false;
+      if (sq && !camp.name.toLowerCase().includes(sq)) return false;
+      return true;
+    }));
+
+    campaigns.forEach(camp => {
+      const campKey = `c_${camp.id}`;
+      rows.push({ ...camp, _rowKey: campKey, _clientId: clientData.clientId, _clientCode: clientData.clientCode, _clientName: clientData.clientName, level: 0 });
+      if (expanded.has(campKey)) {
+        const activeAdsets = sortArr(camp.adsets.filter(a => a.status === 'ACTIVE' || a.status === 'ENABLED'));
+        const inactiveAdsets = sortArr(camp.adsets.filter(a => a.status !== 'ACTIVE' && a.status !== 'ENABLED'));
+
+        activeAdsets.forEach(adset => {
+          const adsetKey = `a_${adset.id}`;
+          rows.push({ ...adset, _rowKey: adsetKey, _clientId: clientData.clientId, _clientCode: clientData.clientCode, level: 1 });
+          if (expanded.has(adsetKey)) {
+            const activeAds = sortArr(adset.ads.filter(ad => ad.status === 'ACTIVE' || ad.status === 'ENABLED'));
+            const inactiveAds = sortArr(adset.ads.filter(ad => ad.status !== 'ACTIVE' && ad.status !== 'ENABLED'));
+            activeAds.forEach(ad => {
+              rows.push({ ...ad, _rowKey: `ad_${ad.id}`, _clientId: clientData.clientId, _clientCode: clientData.clientCode, level: 2 });
+            });
+            if (inactiveAds.length > 0) {
+              const inactKey = `inact_ads_${adset.id}`;
+              rows.push({ _rowKey: inactKey, _type: 'inactive_group', name: `Paused / Inactive (${inactiveAds.length})`, level: 2, _children: inactiveAds, _clientId: clientData.clientId, _clientCode: clientData.clientCode });
+              if (expanded.has(inactKey)) {
+                inactiveAds.forEach(ad => {
+                  rows.push({ ...ad, _rowKey: `ad_${ad.id}`, _clientId: clientData.clientId, _clientCode: clientData.clientCode, level: 2, _dimmed: true });
+                });
+              }
+            }
+          }
+        });
+
+        if (inactiveAdsets.length > 0) {
+          const inactKey = `inact_adsets_${camp.id}`;
+          rows.push({ _rowKey: inactKey, _type: 'inactive_group', name: `Paused / Inactive (${inactiveAdsets.length})`, level: 1, _children: inactiveAdsets, _clientId: clientData.clientId, _clientCode: clientData.clientCode });
+          if (expanded.has(inactKey)) {
+            inactiveAdsets.forEach(adset => {
+              const adsetKey = `a_${adset.id}`;
+              rows.push({ ...adset, _rowKey: adsetKey, _clientId: clientData.clientId, _clientCode: clientData.clientCode, level: 1, _dimmed: true });
+              if (expanded.has(adsetKey)) {
+                adset.ads.forEach(ad => {
+                  rows.push({ ...ad, _rowKey: `ad_${ad.id}`, _clientId: clientData.clientId, _clientCode: clientData.clientCode, level: 2, _dimmed: true });
+                });
+              }
+            });
+          }
+        }
+      }
+    });
     return rows;
   }, [data, expanded, statusFilter, search, sortCol, sortDir]);
 
@@ -338,6 +419,10 @@ export default function PerformanceTable() {
         return fmtNum(row.newContacts);
       case 'returningContacts':
         return fmtNum(row.returningContacts);
+      case 'results':
+        return fmtNum(row.results || 0);
+      case 'costPerResult':
+        return (row.costPerResult || 0) > 0 ? fmtRM(row.costPerResult) : '—';
       default:
         return '—';
     }
@@ -354,8 +439,8 @@ export default function PerformanceTable() {
     { key: 'custom', label: 'Custom' },
   ];
 
-  const allSelected = selectedClients.length === clientList.length;
   const colDefs = DEFAULT_COLS.reduce((m, c) => { m[c.key] = c; return m; }, {});
+  const selectedClientName = clientList.find(c => c.id === selectedClient)?.clientCode || 'Select Client';
 
   return (
     <div style={{ padding: '24px 28px', minHeight: '100vh' }}>
@@ -367,29 +452,21 @@ export default function PerformanceTable() {
 
       {/* Filter bar */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 16, alignItems: 'center' }}>
-        {/* Client selector */}
+        {/* Client selector — single select */}
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => setClientDropOpen(v => !v)}
             style={{ ...st.filterBtn, minWidth: 140 }}
           >
-            {allSelected ? 'All Clients' : `${selectedClients.length} Client${selectedClients.length !== 1 ? 's' : ''}`} &#9662;
+            {selectedClientName} &#9662;
           </button>
           {clientDropOpen && (
             <div style={st.dropdown}>
-              <div style={st.dropItem} onClick={() => {
-                setSelectedClients(allSelected ? [] : clientList.map(c => c.id));
-              }}>
-                <input type="checkbox" checked={allSelected} readOnly style={{ marginRight: 8 }} />
-                All Clients
-              </div>
               {clientList.map(c => (
-                <div key={c.id} style={st.dropItem} onClick={() => {
-                  setSelectedClients(prev =>
-                    prev.includes(c.id) ? prev.filter(x => x !== c.id) : [...prev, c.id]
-                  );
+                <div key={c.id} style={{ ...st.dropItem, background: c.id === selectedClient ? 'rgba(50,205,50,0.1)' : 'transparent', color: c.id === selectedClient ? '#32cd32' : 'var(--text-primary)' }} onClick={() => {
+                  setSelectedClient(c.id);
+                  setClientDropOpen(false);
                 }}>
-                  <input type="checkbox" checked={selectedClients.includes(c.id)} readOnly style={{ marginRight: 8 }} />
                   {c.clientCode} &#8212; {c.name}
                 </div>
               ))}
@@ -433,7 +510,7 @@ export default function PerformanceTable() {
 
         {/* Refresh */}
         <button onClick={fetchData} style={st.filterBtn} disabled={loading}>
-          {loading ? '&#x2026;' : '&#x21BB; Refresh'}
+          {loading ? '...' : '↻ Refresh'}
         </button>
       </div>
 
@@ -473,7 +550,7 @@ export default function PerformanceTable() {
           <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
             <table style={{ borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', minWidth: '100%' }}>
               <thead>
-                <tr style={{ background: '#03140e' }}>
+                <tr style={{ background: 'var(--card-bg, #03140e)' }}>
                   {/* Frozen name header */}
                   <th style={{ ...st.thFrozen, width: 280, minWidth: 280 }}>
                     <span style={st.thLabel}>Name / Campaign</span>
@@ -489,8 +566,8 @@ export default function PerformanceTable() {
                         onDragStart={() => handleDragStart(key)}
                         onDragOver={e => handleDragOver(e, key)}
                         onDrop={handleDrop}
-                        onClick={() => key !== 'toggle' && handleSort(key)}
-                        style={{ ...st.th, width: w, minWidth: w, cursor: key === 'toggle' ? 'default' : 'pointer', position: 'relative', userSelect: 'none' }}
+                        onClick={() => key !== 'toggle' && key !== 'status' && handleSort(key)}
+                        style={{ ...st.th, width: w, minWidth: w, cursor: (key === 'toggle' || key === 'status') ? 'default' : 'pointer', position: 'relative', userSelect: 'none' }}
                       >
                         <span style={st.thLabel}>
                           {col.label}
@@ -515,53 +592,81 @@ export default function PerformanceTable() {
                     </td>
                   </tr>
                 )}
-                {flatRows.map((row, i) => (
-                  <tr key={row._rowKey}
-                    style={{
-                      background: i % 2 === 0 ? 'transparent' : 'rgba(50,205,50,0.015)',
-                      transition: 'background 0.15s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(50,205,50,0.04)'}
-                    onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'rgba(50,205,50,0.015)'}
-                  >
-                    {/* Frozen name cell */}
-                    <td style={{ ...st.tdFrozen, borderBottom: '1px solid rgba(50,205,50,0.07)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: row.level * 18, minWidth: 0 }}>
-                        {row.level < 2
-                          ? <button
-                              onClick={() => toggleExpand(row._rowKey)}
-                              style={{ background: 'none', border: 'none', color: '#32cd32', cursor: 'pointer', fontSize: 9, padding: '2px 4px', flexShrink: 0, lineHeight: 1 }}
-                            >
-                              {expanded.has(row._rowKey) ? '▼' : '►'}
+                {flatRows.map((row, i) => {
+                  // Inactive group row
+                  if (row._type === 'inactive_group') {
+                    return (
+                      <tr key={row._rowKey} onClick={() => toggleExpand(row._rowKey)} style={{ cursor: 'pointer' }}>
+                        <td style={{ ...st.tdFrozen, borderBottom: '1px solid rgba(50,205,50,0.07)', opacity: 0.6 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: row.level * 18 }}>
+                            <button style={{ background: 'none', border: 'none', color: 'rgba(232,245,233,0.4)', cursor: 'pointer', fontSize: 9, padding: '2px 4px', flexShrink: 0 }}>
+                              {expanded.has(row._rowKey) ? '▼' : '▶'}
                             </button>
-                          : <span style={{ width: 22, display: 'inline-block', flexShrink: 0 }} />
-                        }
-                        {row.level === 0 && (
-                          <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 3, background: 'rgba(50,205,50,0.15)', color: '#32cd32', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                            {row._clientCode}
-                          </span>
-                        )}
-                        <span style={{
-                          fontSize: 12, fontWeight: row.level === 0 ? 600 : row.level === 1 ? 500 : 400,
-                          color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-                          opacity: row.level === 2 ? 0.75 : 1,
-                        }}>{row.name}</span>
-                        {row.level === 0 && row.spend > 0 && row.waConvosStarted === 0 && row.repliedMessages === 0 && (
-                          <span title="Spending but no results" style={{ flexShrink: 0 }}>&#x1F534;</span>
-                        )}
-                        {row.level === 0 && row.frequency > 3 && (
-                          <span title="High frequency" style={{ flexShrink: 0 }}>&#x1F7E1;</span>
-                        )}
-                      </div>
-                    </td>
-                    {/* Metric cells */}
-                    {colOrder.map(key => (
-                      <td key={key} style={{ ...st.td, borderBottom: '1px solid rgba(50,205,50,0.07)' }}>
-                        {renderCell(key, row)}
+                            <span style={{ fontSize: 11, color: 'rgba(232,245,233,0.4)', fontStyle: 'italic' }}>&#9646; {row.name}</span>
+                          </div>
+                        </td>
+                        {colOrder.map(key => <td key={key} style={{ ...st.td, borderBottom: '1px solid rgba(50,205,50,0.07)', opacity: 0.3 }} />)}
+                      </tr>
+                    );
+                  }
+
+                  // Normal row
+                  return (
+                    <tr key={row._rowKey}
+                      style={{
+                        background: i % 2 === 0 ? 'transparent' : 'rgba(50,205,50,0.015)',
+                        transition: 'background 0.15s',
+                        opacity: row._dimmed ? 0.55 : 1,
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(50,205,50,0.04)'}
+                      onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : 'rgba(50,205,50,0.015)'}
+                    >
+                      {/* Frozen name cell */}
+                      <td style={{ ...st.tdFrozen, borderBottom: '1px solid rgba(50,205,50,0.07)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: row.level * 18, minWidth: 0 }}>
+                          {row.level < 2
+                            ? <button
+                                onClick={() => toggleExpand(row._rowKey)}
+                                style={{ background: 'none', border: 'none', color: '#32cd32', cursor: 'pointer', fontSize: 9, padding: '2px 4px', flexShrink: 0, lineHeight: 1 }}
+                              >
+                                {expanded.has(row._rowKey) ? '▼' : '►'}
+                              </button>
+                            : <span style={{ width: 22, display: 'inline-block', flexShrink: 0 }} />
+                          }
+                          {row.level === 0 && (
+                            <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 3, background: 'rgba(50,205,50,0.15)', color: '#32cd32', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                              {row._clientCode}
+                            </span>
+                          )}
+                          <span style={{
+                            fontSize: 12, fontWeight: row.level === 0 ? 600 : row.level === 1 ? 500 : 400,
+                            color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+                            opacity: row.level === 2 ? 0.75 : 1,
+                          }}>{row.name}</span>
+                          {(row.level === 0 || row.level === 1) && (row.objective || row.optimization_goal) && (
+                            <button
+                              onClick={e => { e.stopPropagation(); setInfoPopup(row); }}
+                              style={{ background: 'none', border: 'none', color: 'rgba(50,205,50,0.5)', cursor: 'pointer', fontSize: 11, padding: '0 2px', flexShrink: 0, lineHeight: 1 }}
+                              title="View settings"
+                            >&#x24D8;</button>
+                          )}
+                          {row.level === 0 && row.spend > 0 && row.waConvosStarted === 0 && row.repliedMessages === 0 && (
+                            <span title="Spending but no results" style={{ flexShrink: 0 }}>&#x1F534;</span>
+                          )}
+                          {row.level === 0 && row.frequency > 3 && (
+                            <span title="High frequency" style={{ flexShrink: 0 }}>&#x1F7E1;</span>
+                          )}
+                        </div>
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      {/* Metric cells */}
+                      {colOrder.map(key => (
+                        <td key={key} style={{ ...st.td, borderBottom: '1px solid rgba(50,205,50,0.07)' }}>
+                          {renderCell(key, row)}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -574,6 +679,8 @@ export default function PerformanceTable() {
           {data.dateStart} &#x2192; {data.dateStop}
         </div>
       )}
+
+      {infoPopup && <InfoPopup row={infoPopup} onClose={() => setInfoPopup(null)} />}
     </div>
   );
 }
@@ -612,7 +719,7 @@ const st = {
     padding: '12px 16px', fontSize: 13, color: '#ff6b6b', marginBottom: 14,
   },
   thFrozen: {
-    position: 'sticky', left: 0, zIndex: 5, background: '#03140e',
+    position: 'sticky', left: 0, zIndex: 5, background: 'var(--card-bg, #03140e)',
     padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid rgba(50,205,50,0.2)',
     borderRight: '1px solid rgba(50,205,50,0.12)',
   },
@@ -626,9 +733,9 @@ const st = {
     textTransform: 'uppercase', letterSpacing: 0.8, fontFamily: 'Montserrat, sans-serif',
   },
   tdFrozen: {
-    position: 'sticky', left: 0, zIndex: 3, background: '#0a1f15',
+    position: 'sticky', left: 0, zIndex: 3, background: 'var(--bg)',
     padding: '10px 12px', borderRight: '1px solid rgba(50,205,50,0.12)',
-    maxWidth: 280, minWidth: 280,
+    maxWidth: 280, minWidth: 280, color: 'var(--text-primary)',
   },
   td: {
     padding: '9px 10px', fontSize: 12, color: 'var(--text-primary)',
