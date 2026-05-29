@@ -1,20 +1,48 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
 
-const nav = [
-  { to: '/',          label: 'Dashboard', icon: '◈' },
-  { to: '/monitor',     label: 'Analytic',    icon: '◎' },
-  { to: '/performance', label: 'Performance', icon: '▦' },
-  { to: '/clients',   label: 'Clients',   icon: '◉' },
-  { to: '/generate',  label: 'Generate',  icon: '▶' },
-  { to: '/schedules', label: 'Schedules', icon: '◷' },
-  { to: '/budget',    label: 'Budget',    icon: '◈' },
-  { to: '/history',   label: 'History',   icon: '◫' },
-  { to: '/settings',  label: 'Settings',  icon: '⚙' },
+const SECTIONS = [
+  {
+    id: 'analytic',
+    label: 'Analytic',
+    icon: '◎',
+    children: [
+      { to: '/monitor',     label: 'Dashboard',   icon: '◈' },
+      { to: '/performance', label: 'Performance',  icon: '▦' },
+    ],
+  },
+  {
+    id: 'report',
+    label: 'Report',
+    icon: '◫',
+    children: [
+      { to: '/',          label: 'Dashboard', icon: '◈' },
+      { to: '/generate',  label: 'Generate',  icon: '▶' },
+      { to: '/budget',    label: 'Budget',    icon: '◐' },
+      { to: '/schedules', label: 'Schedule',  icon: '◷' },
+      { to: '/history',   label: 'History',   icon: '▣' },
+    ],
+  },
+  { to: '/clients',  label: 'Client',   icon: '◉' },
+  { to: '/settings', label: 'Settings', icon: '⚙' },
 ];
+
+function isChildActive(children, pathname) {
+  return children.some(c => c.to === '/' ? pathname === '/' : pathname.startsWith(c.to));
+}
+
+function getInitialExpanded(pathname) {
+  const s = new Set();
+  SECTIONS.forEach(sec => {
+    if (sec.children && isChildActive(sec.children, pathname)) s.add(sec.id);
+  });
+  // Default: expand both if no match
+  if (s.size === 0) { s.add('analytic'); s.add('report'); }
+  return s;
+}
 
 export default function Sidebar() {
   const location  = useLocation();
@@ -23,21 +51,32 @@ export default function Sidebar() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { collapsed, toggle, mobileOpen, closeMobile } = useSidebar();
 
+  const [expanded, setExpanded] = useState(() => getInitialExpanded(location.pathname));
+
   const handleLogout = () => { logout(); navigate('/login'); };
   const w = collapsed ? 64 : 220;
 
+  const toggleSection = (id) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const isActive = (to) => to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
+
   return (
     <>
-      {/* Mobile overlay backdrop */}
       {mobileOpen && (
         <div onClick={closeMobile} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          zIndex: 99, display: 'none'
+          zIndex: 99, display: 'none',
         }} className="mobile-backdrop" />
       )}
 
       <aside style={{ ...st.sidebar, width: w }} className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
-        {/* Collapse toggle button */}
+        {/* Collapse toggle */}
         <button onClick={toggle} style={st.collapseBtn} title={collapsed ? 'Expand' : 'Collapse'}>
           <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>‹</span>
         </button>
@@ -54,20 +93,73 @@ export default function Sidebar() {
 
         {/* Nav */}
         <nav style={st.nav}>
-          {nav.map(item => {
-            const active = item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to);
+          {SECTIONS.map(sec => {
+            // Standalone item (Client, Settings)
+            if (sec.to) {
+              const active = isActive(sec.to);
+              return (
+                <NavLink
+                  key={sec.to}
+                  to={sec.to}
+                  onClick={closeMobile}
+                  title={collapsed ? sec.label : ''}
+                  style={{ ...st.navItem, justifyContent: collapsed ? 'center' : 'flex-start', ...(active ? st.navActive : {}) }}
+                >
+                  <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}) }}>{sec.icon}</span>
+                  {!collapsed && <span style={st.navLabel}>{sec.label}</span>}
+                  {active && !collapsed && <div style={st.activeBar} />}
+                </NavLink>
+              );
+            }
+
+            // Section with children
+            const sectionActive = isChildActive(sec.children, location.pathname);
+            const isOpen = expanded.has(sec.id);
+
             return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                onClick={closeMobile}
-                title={collapsed ? item.label : ''}
-                style={{ ...st.navItem, justifyContent: collapsed ? 'center' : 'flex-start', ...(active ? st.navActive : {}) }}
-              >
-                <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}) }}>{item.icon}</span>
-                {!collapsed && <span style={st.navLabel}>{item.label}</span>}
-                {active && !collapsed && <div style={st.activeBar} />}
-              </NavLink>
+              <div key={sec.id}>
+                {/* Section header */}
+                {!collapsed ? (
+                  <button
+                    onClick={() => toggleSection(sec.id)}
+                    style={{ ...st.sectionHeader, ...(sectionActive ? st.sectionHeaderActive : {}) }}
+                  >
+                    <span style={{ ...st.navIcon, ...(sectionActive ? st.navIconActive : {}), fontSize: 14 }}>{sec.icon}</span>
+                    <span style={{ ...st.navLabel, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      {sec.label}
+                    </span>
+                    <span style={{ fontSize: 10, opacity: 0.5, transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }}>▶</span>
+                  </button>
+                ) : (
+                  // Collapsed: show thin divider with section icon
+                  <div style={st.collapsedSectionDivider} title={sec.label}>
+                    <span style={{ fontSize: 9, opacity: 0.35, color: '#32cd32' }}>{sec.icon}</span>
+                  </div>
+                )}
+
+                {/* Children */}
+                {(collapsed || isOpen) && sec.children.map(child => {
+                  const active = isActive(child.to);
+                  return (
+                    <NavLink
+                      key={child.to}
+                      to={child.to}
+                      onClick={closeMobile}
+                      title={collapsed ? `${sec.label} · ${child.label}` : ''}
+                      style={{
+                        ...st.navItem,
+                        justifyContent: collapsed ? 'center' : 'flex-start',
+                        ...(collapsed ? {} : st.childItem),
+                        ...(active ? st.navActive : {}),
+                      }}
+                    >
+                      <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}), fontSize: 13 }}>{child.icon}</span>
+                      {!collapsed && <span style={{ ...st.navLabel, fontSize: 12 }}>{child.label}</span>}
+                      {active && !collapsed && <div style={st.activeBar} />}
+                    </NavLink>
+                  );
+                })}
+              </div>
             );
           })}
         </nav>
@@ -103,7 +195,7 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Footer text */}
+        {/* Footer */}
         {!collapsed && (
           <div style={st.sidebarFooter}>
             <div style={st.footerTag}>TECHNICAL-FIRST</div>
@@ -116,7 +208,6 @@ export default function Sidebar() {
   );
 }
 
-// Sidebar always uses dark theme regardless of app theme
 const st = {
   sidebar: {
     minHeight: '100vh',
@@ -153,13 +244,18 @@ const st = {
   logo:      { width: 150, height: 'auto', objectFit: 'contain' },
   logoSmall: { width: 36, height: 36, objectFit: 'contain' },
   divider:   { borderTop: '1px solid rgba(50,205,50,0.12)', margin: '14px 14px' },
-  nav:       { display: 'flex', flexDirection: 'column', gap: 2, padding: '0 8px' },
+  nav:       { display: 'flex', flexDirection: 'column', gap: 1, padding: '0 8px' },
   navItem: {
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '11px 12px', borderRadius: 10,
+    padding: '10px 12px', borderRadius: 10,
     textDecoration: 'none', color: 'rgba(232,245,233,0.5)',
     fontSize: 13, fontWeight: 500, transition: 'all 0.2s',
     position: 'relative', cursor: 'pointer', whiteSpace: 'nowrap',
+  },
+  childItem: {
+    paddingLeft: 28,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
   navActive:     { background: 'rgba(50,205,50,0.1)', color: '#e8f5e9', border: '1px solid rgba(50,205,50,0.2)' },
   navIcon:       { fontSize: 16, width: 20, textAlign: 'center', opacity: 0.6, flexShrink: 0 },
@@ -167,7 +263,23 @@ const st = {
   navLabel:      { flex: 1 },
   activeBar: {
     position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
-    width: 3, height: '60%', background: '#32cd32', borderRadius: '2px 0 0 2px'
+    width: 3, height: '60%', background: '#32cd32', borderRadius: '2px 0 0 2px',
+  },
+  sectionHeader: {
+    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+    padding: '9px 12px', borderRadius: 10,
+    background: 'none', border: 'none',
+    color: 'rgba(232,245,233,0.4)', cursor: 'pointer',
+    transition: 'all 0.2s', whiteSpace: 'nowrap',
+    marginTop: 4,
+  },
+  sectionHeaderActive: {
+    color: 'rgba(232,245,233,0.75)',
+  },
+  collapsedSectionDivider: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: '6px 0', margin: '2px 0',
+    borderTop: '1px solid rgba(50,205,50,0.1)',
   },
   themeBtn: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 8,
