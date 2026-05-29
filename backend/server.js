@@ -295,6 +295,27 @@ app.put('/api/auth/password', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── User Preferences ──────────────────────────────────────────────────────────
+app.get('/api/preferences', async (req, res) => {
+  try {
+    const db = await getDb();
+    const doc = await db.collection('userPrefs').findOne({ userId: req.user.id });
+    res.json(doc?.prefs || {});
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/preferences', async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.collection('userPrefs').updateOne(
+      { userId: req.user.id },
+      { $set: { userId: req.user.id, prefs: req.body, updatedAt: new Date() } },
+      { upsert: true }
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Team User Management (admin only) ─────────────────────────────────────────
 function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });

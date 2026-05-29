@@ -90,6 +90,11 @@ export const performanceAPI = {
   toggle: (data)   => api.post('/performance/toggle', data).then(r => r.data),
 };
 
+export const prefsAPI = {
+  get:  ()     => api.get('/preferences').then(r => r.data),
+  save: (data) => api.put('/preferences', data).then(r => r.data),
+};
+
 export const backendUrl = (filePath) => {
   const base = process.env.REACT_APP_API_URL || '';
   return `${base}${filePath}`;

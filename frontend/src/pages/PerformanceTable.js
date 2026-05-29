@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { clientsAPI, performanceAPI } from '../utils/api';
+import { clientsAPI, performanceAPI, prefsAPI } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 
 const DEFAULT_COLS = [
@@ -216,16 +216,49 @@ export default function PerformanceTable() {
   const dragOverColRef = useRef(null);
   const resizingRef = useRef(null);
 
-  // Load clients on mount
+  // Load clients + column preferences on mount
   useEffect(() => {
     (async () => {
       try {
-        const list = user?.role === 'admin' ? await clientsAPI.list() : await clientsAPI.getAssigned();
+        const [list, prefs] = await Promise.all([
+          user?.role === 'admin' ? clientsAPI.list() : clientsAPI.getAssigned(),
+          prefsAPI.get().catch(() => ({})),
+        ]);
         setClientList(list);
         setSelectedClient(list[0]?.id || null);
+        // Apply saved column prefs from server (overrides localStorage)
+        if (prefs.perfColumns) {
+          const { allColOrder: sOrder, visibleCols: sVis, savedViews: sViews } = prefs.perfColumns;
+          if (sOrder?.length) {
+            const merged = sOrder.filter(k => DEFAULT_COL_ORDER.includes(k));
+            const missing = DEFAULT_COL_ORDER.filter(k => !merged.includes(k));
+            const final = missing.length ? [...merged, ...missing] : merged;
+            setAllColOrder(final);
+            saveAllColOrder(final);
+          }
+          if (sVis?.length) {
+            const vis = new Set(sVis.filter(k => DEFAULT_COL_ORDER.includes(k)));
+            setVisibleCols(vis);
+            saveVisibleCols(vis);
+          }
+          if (sViews) {
+            setSavedViews(sViews);
+            localStorage.setItem('perf_saved_views', JSON.stringify(sViews));
+          }
+        }
       } catch {}
     })();
   }, [user]);
+
+  // Debounced save column prefs to server whenever they change
+  const savePrefsTimerRef = useRef(null);
+  useEffect(() => {
+    if (savePrefsTimerRef.current) clearTimeout(savePrefsTimerRef.current);
+    savePrefsTimerRef.current = setTimeout(() => {
+      prefsAPI.save({ perfColumns: { allColOrder, visibleCols: [...visibleCols], savedViews } }).catch(() => {});
+    }, 1500);
+    return () => clearTimeout(savePrefsTimerRef.current);
+  }, [allColOrder, visibleCols, savedViews]);
 
   // Fetch data when filters change
   const fetchData = useCallback(async () => {
