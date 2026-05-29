@@ -996,8 +996,31 @@ function extractAction(actions, type) {
 
 function extractCostPerAction(costArr, type) {
   if (!costArr) return 0;
+  if (!type) return 0;
   const f = (Array.isArray(costArr) ? costArr : []).find(a => a.action_type === type);
   return f ? parseFloat(f.value || 0) : 0;
+}
+
+// Maps ad set optimization_goal → the Meta action type used as "Results"
+function actionTypeForGoal(optimizationGoal) {
+  const g = (optimizationGoal || '').toUpperCase();
+  if (g === 'CONVERSATIONS' || g.includes('MESSAGING')) return 'onsite_conversion.messaging_conversation_started_7d';
+  if (g === 'LEAD_GENERATION' || g.includes('LEAD')) return 'lead';
+  if (g === 'VIDEO_VIEWS' || g === 'THRUPLAY') return 'video_view';
+  if (g === 'LINK_CLICKS' || g === 'LANDING_PAGE_VIEWS' || g === 'OFFSITE_CONVERSIONS') return 'link_click';
+  if (g === 'POST_ENGAGEMENT' || g === 'REACTIONS' || g === 'IMPRESSIONS' || g === 'REACH') return 'post_engagement';
+  return null;
+}
+
+// Maps campaign objective → the Meta action type used as "Results" (fallback when no opt goal)
+function actionTypeForObjective(objective) {
+  const obj = (objective || '').toUpperCase();
+  if (obj.includes('LEAD')) return 'lead';
+  if (obj === 'MESSAGES' || obj.includes('OUTCOME_ENGAGEMENT_MESSAGING') || obj.includes('OUTCOME_TRAFFIC_MESSAGING')) return 'onsite_conversion.messaging_conversation_started_7d';
+  if (obj.includes('VIDEO')) return 'video_view';
+  if (obj.includes('TRAFFIC') || obj.includes('LINK_CLICK')) return 'link_click';
+  if (obj.includes('POST_ENGAGEMENT') || (obj.includes('ENGAGEMENT') && !obj.includes('MESSAGING'))) return 'post_engagement';
+  return 'onsite_conversion.messaging_conversation_started_7d';
 }
 
 const MONITOR_TTL_MS = 30 * 60 * 1000;
@@ -1288,20 +1311,9 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
   return campIns.map(c => {
     const cs = campMap[c.campaign_id] || {};
     const objective = cs.objective || '';
-    const resolveResults = (m, rawRow) => {
-      const obj = objective.toUpperCase();
-      let actionType;
-      if (obj.includes('LEAD'))
-        actionType = 'lead';
-      else if (obj.includes('POST_ENGAGEMENT') || (obj.includes('ENGAGEMENT') && !obj.includes('MESSAGING')))
-        actionType = 'post_engagement';
-      else if (obj.includes('VIDEO'))
-        actionType = 'video_view';
-      else if (obj.includes('TRAFFIC') || obj.includes('LINK_CLICK'))
-        actionType = 'link_click';
-      else
-        actionType = 'onsite_conversion.messaging_conversation_started_7d';
-      // Use cost_per_action_type from Meta API directly — matches Ads Manager exactly
+    // ad set opt goal takes priority over campaign objective for result metric
+    const resolveResults = (m, rawRow, optGoal) => {
+      const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
       const costPerResult = extractCostPerAction(rawRow?.cost_per_action_type, actionType);
       const results = costPerResult > 0 ? Math.round(m.spend / costPerResult) : 0;
       return { results, costPerResult };
@@ -1309,31 +1321,35 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
 
     const adsets = (adsetByCamp[c.campaign_id] || []).map(a => {
       const as2 = adsetMap[a.adset_id] || {};
+      const optGoal = as2.optimization_goal || '';
       const aMetrics = extractPerfMetrics(a);
       const ads = (adByAdset[a.adset_id] || []).map(ad => {
         const ads2 = adMap[ad.ad_id] || {};
         const adMetrics = extractPerfMetrics(ad);
-        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...adMetrics, ...resolveResults(adMetrics, ad) };
+        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...adMetrics, ...resolveResults(adMetrics, ad, optGoal) };
       });
       const db = parseBudget(as2.daily_budget), lb = parseBudget(as2.lifetime_budget);
       return {
         id: a.adset_id, name: a.adset_name,
         status: as2.effective_status || 'UNKNOWN',
-        optimization_goal: as2.optimization_goal || '',
+        optimization_goal: optGoal,
         billing_event: as2.billing_event || '',
         targeting: as2.targeting || null,
         budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
-        ...aMetrics, ...resolveResults(aMetrics, a), ads
+        ...aMetrics, ...resolveResults(aMetrics, a, optGoal), ads
       };
     });
     const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
     const cMetrics = extractPerfMetrics(c);
+    // For campaign row: use the most common opt goal among its ad sets as the primary result metric
+    const campOptGoals = (adsetByCamp[c.campaign_id] || []).map(a => (adsetMap[a.adset_id] || {}).optimization_goal || '');
+    const campPrimaryGoal = campOptGoals.length > 0 ? campOptGoals[0] : '';
     return {
       id: c.campaign_id, name: c.campaign_name,
       status: cs.effective_status || 'UNKNOWN',
       objective,
       budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null,
-      ...cMetrics, ...resolveResults(cMetrics, c), adsets
+      ...cMetrics, ...resolveResults(cMetrics, c, campPrimaryGoal), adsets
     };
   });
 }
@@ -1800,7 +1816,7 @@ app.get('/api/performance/table', async (req, res) => {
     }
     const clients = (await Promise.all(visible.map(async (client) => {
       try {
-        const cacheKey = `perf_v3_${rangeKey}`;
+        const cacheKey = `perf_v4_${rangeKey}`;
         let cached = await getMonitorCache(client.id, cacheKey);
         if (!cached) {
           const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
