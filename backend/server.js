@@ -804,6 +804,12 @@ app.get('/api/clients/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+const normaliseAdAccountId = (id) => {
+  if (!id) return id;
+  const s = String(id).trim();
+  return s.startsWith('act_') ? s : `act_${s}`;
+};
+
 // POST — add new client
 app.post('/api/clients', async (req, res) => {
   try {
@@ -818,7 +824,7 @@ app.post('/api/clients', async (req, res) => {
     const client = {
       id: uuidv4(),
       clientCode: clientCode.toUpperCase(),
-      name, accessToken, adAccountId,
+      name, accessToken, adAccountId: normaliseAdAccountId(adAccountId),
       campaignGoals: campaignGoals || [],
       branches: branches || [],
       primaryColor: primaryColor || '#E8A000',
@@ -837,6 +843,7 @@ app.put('/api/clients/:id', async (req, res) => {
     const db = await getDb();
     const existing = await db.collection('clients').findOne({ id: req.params.id });
     if (!existing) return res.status(404).json({ error: 'Client not found' });
+    if (req.body.adAccountId) req.body.adAccountId = normaliseAdAccountId(req.body.adAccountId);
     const updated = { ...existing, ...req.body, id: existing.id, updatedAt: new Date().toISOString() };
     delete updated._id;
     await db.collection('clients').replaceOne({ id: req.params.id }, updated);
