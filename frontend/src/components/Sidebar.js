@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
@@ -39,10 +40,11 @@ function getInitialExpanded(pathname) {
   SECTIONS.forEach(sec => {
     if (sec.children && isChildActive(sec.children, pathname)) s.add(sec.id);
   });
-  // Default: expand both if no match
   if (s.size === 0) { s.add('analytic'); s.add('report'); }
   return s;
 }
+
+const EASE = [0.4, 0, 0.2, 1];
 
 export default function Sidebar() {
   const location  = useLocation();
@@ -54,7 +56,6 @@ export default function Sidebar() {
   const [expanded, setExpanded] = useState(() => getInitialExpanded(location.pathname));
 
   const handleLogout = () => { logout(); navigate('/login'); };
-  const w = collapsed ? 64 : 220;
 
   const toggleSection = (id) => {
     setExpanded(prev => {
@@ -68,25 +69,72 @@ export default function Sidebar() {
 
   return (
     <>
-      {mobileOpen && (
-        <div onClick={closeMobile} style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          zIndex: 99, display: 'none',
-        }} className="mobile-backdrop" />
-      )}
+      {/* Mobile backdrop */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <motion.div
+            key="backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={closeMobile}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 99 }}
+          />
+        )}
+      </AnimatePresence>
 
-      <aside style={{ ...st.sidebar, width: w }} className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}>
+      <motion.aside
+        animate={{ width: collapsed ? 64 : 220 }}
+        transition={{ duration: 0.28, ease: EASE }}
+        style={st.sidebar}
+        className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}
+      >
         {/* Collapse toggle */}
-        <button onClick={toggle} style={st.collapseBtn} title={collapsed ? 'Expand' : 'Collapse'}>
-          <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.3s' }}>‹</span>
-        </button>
+        <motion.button
+          onClick={toggle}
+          style={st.collapseBtn}
+          title={collapsed ? 'Expand' : 'Collapse'}
+          whileHover={{ scale: 1.15, boxShadow: '0 4px 14px rgba(50,205,50,0.5)' }}
+          whileTap={{ scale: 0.88 }}
+          transition={{ duration: 0.15 }}
+        >
+          <motion.span
+            animate={{ rotate: collapsed ? 180 : 0 }}
+            transition={{ duration: 0.28, ease: EASE }}
+            style={{ display: 'inline-block', lineHeight: 1 }}
+          >
+            ‹
+          </motion.span>
+        </motion.button>
 
         {/* Logo */}
         <div style={st.logoWrap}>
-          {collapsed
-            ? <img src="/logo.png" alt="M" style={st.logoSmall} />
-            : <img src="/logo.png" alt="Millecube" style={st.logo} />
-          }
+          <AnimatePresence mode="wait" initial={false}>
+            {collapsed ? (
+              <motion.img
+                key="logo-sm"
+                src="/logo.png"
+                alt="M"
+                style={st.logoSmall}
+                initial={{ opacity: 0, scale: 0.75 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.75 }}
+                transition={{ duration: 0.18 }}
+              />
+            ) : (
+              <motion.img
+                key="logo-lg"
+                src="/logo.png"
+                alt="Millecube"
+                style={st.logo}
+                initial={{ opacity: 0, x: -12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -12 }}
+                transition={{ duration: 0.2 }}
+              />
+            )}
+          </AnimatePresence>
         </div>
 
         <div style={st.divider} />
@@ -94,7 +142,6 @@ export default function Sidebar() {
         {/* Nav */}
         <nav style={st.nav}>
           {SECTIONS.map(sec => {
-            // Standalone item (Client, Settings)
             if (sec.to) {
               const active = isActive(sec.to);
               return (
@@ -106,56 +153,105 @@ export default function Sidebar() {
                   style={{ ...st.navItem, justifyContent: collapsed ? 'center' : 'flex-start', ...(active ? st.navActive : {}) }}
                 >
                   <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}) }}>{sec.icon}</span>
-                  {!collapsed && <span style={st.navLabel}>{sec.label}</span>}
+                  <AnimatePresence initial={false}>
+                    {!collapsed && (
+                      <motion.span
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0, transition: { delay: 0.06, duration: 0.16 } }}
+                        exit={{ opacity: 0, x: -6, transition: { duration: 0.1 } }}
+                        style={st.navLabel}
+                      >
+                        {sec.label}
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
                   {active && !collapsed && <div style={st.activeBar} />}
                 </NavLink>
               );
             }
 
-            // Section with children
             const sectionActive = isChildActive(sec.children, location.pathname);
             const isOpen = expanded.has(sec.id);
 
             return (
               <div key={sec.id}>
-                {/* Section header */}
                 {!collapsed ? (
-                  <button
+                  <motion.button
                     onClick={() => toggleSection(sec.id)}
                     style={{ ...st.sectionHeader, ...(sectionActive ? st.sectionHeaderActive : {}) }}
+                    whileHover={{ backgroundColor: 'rgba(50,205,50,0.06)' }}
+                    transition={{ duration: 0.15 }}
                   >
                     <span style={{ ...st.navIcon, ...(sectionActive ? st.navIconActive : {}), fontSize: 14 }}>{sec.icon}</span>
                     <span style={{ ...st.navLabel, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>
                       {sec.label}
                     </span>
-                    <span style={{ fontSize: 10, opacity: 0.5, transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }}>▶</span>
-                  </button>
+                    <motion.span
+                      animate={{ rotate: isOpen ? 90 : 0 }}
+                      transition={{ duration: 0.2, ease: EASE }}
+                      style={{ fontSize: 10, opacity: 0.5, flexShrink: 0 }}
+                    >
+                      ▶
+                    </motion.span>
+                  </motion.button>
                 ) : (
-                  // Collapsed: show thin divider with section icon
                   <div style={st.collapsedSectionDivider} title={sec.label}>
                     <span style={{ fontSize: 9, opacity: 0.35, color: '#32cd32' }}>{sec.icon}</span>
                   </div>
                 )}
 
-                {/* Children */}
-                {(collapsed || isOpen) && sec.children.map(child => {
+                {/* Expanded children (animated) */}
+                <AnimatePresence initial={false}>
+                  {!collapsed && isOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.22, ease: 'easeInOut' }}
+                      style={{ overflow: 'hidden' }}
+                    >
+                      {sec.children.map((child, i) => {
+                        const active = isActive(child.to);
+                        return (
+                          <motion.div
+                            key={child.to}
+                            initial={{ x: -10, opacity: 0 }}
+                            animate={{ x: 0, opacity: 1 }}
+                            transition={{ delay: i * 0.045, duration: 0.18, ease: EASE }}
+                          >
+                            <NavLink
+                              to={child.to}
+                              onClick={closeMobile}
+                              style={{
+                                ...st.navItem,
+                                justifyContent: 'flex-start',
+                                ...st.childItem,
+                                ...(active ? st.navActive : {}),
+                              }}
+                            >
+                              <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}), fontSize: 13 }}>{child.icon}</span>
+                              <span style={{ ...st.navLabel, fontSize: 12 }}>{child.label}</span>
+                              {active && <div style={st.activeBar} />}
+                            </NavLink>
+                          </motion.div>
+                        );
+                      })}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Collapsed children: icons only */}
+                {collapsed && sec.children.map(child => {
                   const active = isActive(child.to);
                   return (
                     <NavLink
                       key={child.to}
                       to={child.to}
                       onClick={closeMobile}
-                      title={collapsed ? `${sec.label} · ${child.label}` : ''}
-                      style={{
-                        ...st.navItem,
-                        justifyContent: collapsed ? 'center' : 'flex-start',
-                        ...(collapsed ? {} : st.childItem),
-                        ...(active ? st.navActive : {}),
-                      }}
+                      title={`${sec.label} · ${child.label}`}
+                      style={{ ...st.navItem, justifyContent: 'center', ...(active ? st.navActive : {}) }}
                     >
                       <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}), fontSize: 13 }}>{child.icon}</span>
-                      {!collapsed && <span style={{ ...st.navLabel, fontSize: 12 }}>{child.label}</span>}
-                      {active && !collapsed && <div style={st.activeBar} />}
                     </NavLink>
                   );
                 })}
@@ -167,43 +263,84 @@ export default function Sidebar() {
         <div style={{ flex: 1 }} />
 
         {/* Theme toggle */}
-        {!collapsed ? (
-          <div style={{ padding: '4px 10px' }}>
-            <button onClick={toggleTheme} style={st.themeBtn}>
-              <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
-              <span style={st.themeLabel}>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
-            </button>
-          </div>
-        ) : (
-          <div style={{ padding: '4px 10px' }}>
-            <button onClick={toggleTheme} style={{ ...st.themeBtn, justifyContent: 'center', padding: '9px 0' }} title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
-              <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
-            </button>
-          </div>
-        )}
+        <div style={{ padding: '4px 10px' }}>
+          <motion.button
+            onClick={toggleTheme}
+            style={{ ...st.themeBtn, justifyContent: collapsed ? 'center' : undefined, padding: collapsed ? '9px 0' : undefined }}
+            whileHover={{ borderColor: 'rgba(50,205,50,0.45)', backgroundColor: 'rgba(50,205,50,0.07)' }}
+            whileTap={{ scale: 0.96 }}
+            transition={{ duration: 0.15 }}
+            title={collapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : ''}
+          >
+            <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
+            <AnimatePresence initial={false}>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: 'auto', transition: { delay: 0.06, duration: 0.16 } }}
+                  exit={{ opacity: 0, width: 0, transition: { duration: 0.1 } }}
+                  style={{ ...st.themeLabel, overflow: 'hidden', whiteSpace: 'nowrap' }}
+                >
+                  {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </motion.button>
+        </div>
 
         {/* User + logout */}
         {user && (
           <div style={{ ...st.userWrap, justifyContent: collapsed ? 'center' : 'space-between' }}>
             <div style={st.userInfo}>
               <div style={st.userAvatar}>{user.username?.[0]?.toUpperCase()}</div>
-              {!collapsed && <div style={st.userName}>{user.username}</div>}
+              <AnimatePresence initial={false}>
+                {!collapsed && (
+                  <motion.div
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0, transition: { delay: 0.06, duration: 0.16 } }}
+                    exit={{ opacity: 0, x: -8, transition: { duration: 0.1 } }}
+                    style={st.userName}
+                  >
+                    {user.username}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-            {!collapsed && (
-              <button onClick={handleLogout} style={st.logoutBtn} title="Sign out">⏻</button>
-            )}
+            <AnimatePresence initial={false}>
+              {!collapsed && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1, transition: { delay: 0.1, duration: 0.16 } }}
+                  exit={{ opacity: 0, scale: 0.7, transition: { duration: 0.1 } }}
+                  whileHover={{ color: '#ff4d4d', scale: 1.15 }}
+                  whileTap={{ scale: 0.88 }}
+                  onClick={handleLogout}
+                  style={st.logoutBtn}
+                  title="Sign out"
+                >
+                  ⏻
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
         {/* Footer */}
-        {!collapsed && (
-          <div style={st.sidebarFooter}>
-            <div style={st.footerTag}>TECHNICAL-FIRST</div>
-            <div style={st.footerTag}>NO CONTRACT</div>
-            <div style={st.footerTag}>RESULT DRIVEN</div>
-          </div>
-        )}
-      </aside>
+        <AnimatePresence initial={false}>
+          {!collapsed && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1, transition: { delay: 0.1, duration: 0.2 } }}
+              exit={{ opacity: 0, transition: { duration: 0.1 } }}
+              style={st.sidebarFooter}
+            >
+              <div style={st.footerTag}>TECHNICAL-FIRST</div>
+              <div style={st.footerTag}>NO CONTRACT</div>
+              <div style={st.footerTag}>RESULT DRIVEN</div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.aside>
     </>
   );
 }
@@ -219,7 +356,6 @@ const st = {
     position: 'fixed',
     top: 0, left: 0, bottom: 0,
     zIndex: 100,
-    transition: 'width 0.25s ease',
     overflow: 'hidden',
   },
   collapseBtn: {
@@ -249,7 +385,7 @@ const st = {
     display: 'flex', alignItems: 'center', gap: 10,
     padding: '10px 12px', borderRadius: 10,
     textDecoration: 'none', color: 'rgba(232,245,233,0.5)',
-    fontSize: 13, fontWeight: 500, transition: 'all 0.2s',
+    fontSize: 13, fontWeight: 500, transition: 'background 0.18s, color 0.18s, border-color 0.18s',
     position: 'relative', cursor: 'pointer', whiteSpace: 'nowrap',
   },
   childItem: {
@@ -270,12 +406,9 @@ const st = {
     padding: '9px 12px', borderRadius: 10,
     background: 'none', border: 'none',
     color: 'rgba(232,245,233,0.4)', cursor: 'pointer',
-    transition: 'all 0.2s', whiteSpace: 'nowrap',
-    marginTop: 4,
+    whiteSpace: 'nowrap', marginTop: 4,
   },
-  sectionHeaderActive: {
-    color: 'rgba(232,245,233,0.75)',
-  },
+  sectionHeaderActive: { color: 'rgba(232,245,233,0.75)' },
   collapsedSectionDivider: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: '6px 0', margin: '2px 0',
@@ -286,7 +419,7 @@ const st = {
     padding: '9px 12px', borderRadius: 10,
     background: 'none', border: '1px solid rgba(50,205,50,0.15)',
     color: 'rgba(232,245,233,0.6)', fontSize: 13, cursor: 'pointer',
-    transition: 'all 0.2s', whiteSpace: 'nowrap',
+    whiteSpace: 'nowrap',
   },
   themeLabel: { flex: 1, textAlign: 'left', color: 'rgba(232,245,233,0.6)' },
   userWrap: {

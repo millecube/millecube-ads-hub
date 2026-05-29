@@ -132,8 +132,9 @@ body {
   box-shadow: 0 4px 15px rgba(50,205,50,0.35);
 }
 .btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(50,205,50,0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(50,205,50,0.55);
+  filter: brightness(1.06);
 }
 
 .btn-ghost {
@@ -152,6 +153,11 @@ body {
 .btn-danger:hover { background: rgba(255,77,77,0.25); }
 
 .btn-sm { padding: 6px 14px; font-size: 12px; }
+
+.btn:active:not(:disabled) {
+  transform: scale(0.96) translateY(0) !important;
+  transition: transform 0.08s ease !important;
+}
 
 .btn:disabled {
   opacity: 0.4;
@@ -404,6 +410,10 @@ select.form-input option { background: var(--input-option-bg); color: var(--text
   .toast-container { bottom: 12px; right: 12px; left: 12px; }
   .toast { max-width: 100%; }
 }
+
+/* ── Tailwind utility layer ────────────────────────────────────── */
+@tailwind components;
+@tailwind utilities;
 
 @media (max-width: 480px) {
   .data-table th:nth-child(n+5),

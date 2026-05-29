@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { budgetAPI } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -36,13 +37,12 @@ export default function Header() {
         });
       });
       setItems(unconfirmed);
-    } catch { /* silent — header bell is non-critical */ }
+    } catch { /* silent */ }
     finally { setLoading(false); }
   }, [user]);
 
   useEffect(() => { load(); }, [load]);
 
-  // Close dropdown on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -61,52 +61,82 @@ export default function Header() {
       <div style={{ flex: 1 }} />
 
       <div ref={ref} style={{ position: 'relative' }}>
-        <button
+        <motion.button
           onClick={() => { setOpen(v => !v); if (!open) load(); }}
           style={s.bell}
           title="Budget notifications"
+          whileHover={{ borderColor: 'rgba(50,205,50,0.45)', scale: 1.06 }}
+          whileTap={{ scale: 0.93 }}
+          transition={{ duration: 0.14 }}
         >
           🔔
-          {items.length > 0 && (
-            <span style={s.badge}>{items.length}</span>
-          )}
-        </button>
-
-        {open && (
-          <div style={s.dropdown}>
-            <div style={s.ddHeader}>
-              <span style={s.ddTitle}>Budget Alerts</span>
-              <button onClick={() => { setOpen(false); navigate('/budget'); }} style={s.ddLink}>
-                View Budget →
-              </button>
-            </div>
-
-            {loading ? (
-              <div style={{ padding: '16px', textAlign: 'center' }}><div className="spinner" style={{ width: 16, height: 16, margin: '0 auto' }} /></div>
-            ) : items.length === 0 ? (
-              <div style={s.ddEmpty}>✓ All budgets confirmed</div>
-            ) : (
-              <div style={s.ddList}>
-                {items.map((item, i) => (
-                  <div key={i} style={s.ddItem} onClick={() => { setOpen(false); navigate('/budget'); }}>
-                    <div style={s.ddClient}>
-                      <span style={s.ddCode}>{item.clientCode}</span>
-                      <span style={s.ddName}>{item.name}</span>
-                    </div>
-                    <div style={s.ddMeta}>
-                      <span style={s.ddMonth}>{fmtMonth(item.month)}</span>
-                      <span style={item.amount !== null ? s.ddWarn : s.ddMissing}>
-                        {item.amount !== null
-                          ? `RM ${parseFloat(item.amount).toLocaleString('en-MY', { minimumFractionDigits: 0 })} — unconfirmed`
-                          : 'Not set'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+          <AnimatePresence>
+            {items.length > 0 && (
+              <motion.span
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                exit={{ scale: 0 }}
+                transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+                style={s.badge}
+              >
+                {items.length}
+              </motion.span>
             )}
-          </div>
-        )}
+          </AnimatePresence>
+        </motion.button>
+
+        <AnimatePresence>
+          {open && (
+            <motion.div
+              initial={{ opacity: 0, y: -8, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.96 }}
+              transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+              style={s.dropdown}
+            >
+              <div style={s.ddHeader}>
+                <span style={s.ddTitle}>Budget Alerts</span>
+                <button onClick={() => { setOpen(false); navigate('/budget'); }} style={s.ddLink}>
+                  View Budget →
+                </button>
+              </div>
+
+              {loading ? (
+                <div style={{ padding: '16px', textAlign: 'center' }}>
+                  <div className="spinner" style={{ width: 16, height: 16, margin: '0 auto' }} />
+                </div>
+              ) : items.length === 0 ? (
+                <div style={s.ddEmpty}>✓ All budgets confirmed</div>
+              ) : (
+                <div style={s.ddList}>
+                  {items.map((item, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.05, duration: 0.18 }}
+                      style={s.ddItem}
+                      onClick={() => { setOpen(false); navigate('/budget'); }}
+                    >
+                      <div style={s.ddClient}>
+                        <span style={s.ddCode}>{item.clientCode}</span>
+                        <span style={s.ddName}>{item.name}</span>
+                      </div>
+                      <div style={s.ddMeta}>
+                        <span style={s.ddMonth}>{fmtMonth(item.month)}</span>
+                        <span style={item.amount !== null ? s.ddWarn : s.ddMissing}>
+                          {item.amount !== null
+                            ? `RM ${parseFloat(item.amount).toLocaleString('en-MY', { minimumFractionDigits: 0 })} — unconfirmed`
+                            : 'Not set'}
+                        </span>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -124,7 +154,6 @@ const s = {
     borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
     fontSize: 16, lineHeight: 1,
     color: 'var(--text-primary)',
-    transition: 'border-color 0.2s',
   },
   badge: {
     position: 'absolute', top: -6, right: -6,
@@ -142,6 +171,7 @@ const s = {
     boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
     overflow: 'hidden',
     zIndex: 200,
+    transformOrigin: 'top right',
   },
   ddHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',

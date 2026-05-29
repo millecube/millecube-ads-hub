@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { settingsAPI } from './utils/api';
 import Sidebar    from './components/Sidebar';
 import Dashboard  from './pages/Dashboard';
@@ -19,7 +20,15 @@ import { AuthProvider, useAuth }     from './context/AuthContext';
 import { ThemeProvider }   from './context/ThemeContext';
 import { SidebarProvider, useSidebar } from './context/SidebarContext';
 
+const PAGE_TRANSITION = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  exit:    { opacity: 0, y: -6 },
+  transition: { duration: 0.22, ease: [0.4, 0, 0.2, 1] },
+};
+
 function Layout({ children }) {
+  const location = useLocation();
   const { collapsed, mobileOpen, openMobile, closeMobile } = useSidebar();
   const sidebarW = collapsed ? 64 : 220;
 
@@ -39,13 +48,24 @@ function Layout({ children }) {
         flex: 1,
         minHeight: '100vh',
         overflowX: 'hidden',
-        transition: 'margin-left 0.25s ease',
+        transition: 'margin-left 0.28s cubic-bezier(0.4,0,0.2,1)',
         background: 'var(--bg)',
       }} className="main-content">
         {/* Mobile hamburger */}
         <button onClick={openMobile} className="hamburger" aria-label="Open menu">☰</button>
         <Header />
-        {children}
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={location.pathname}
+            initial={PAGE_TRANSITION.initial}
+            animate={PAGE_TRANSITION.animate}
+            exit={PAGE_TRANSITION.exit}
+            transition={PAGE_TRANSITION.transition}
+          >
+            {children}
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   );
@@ -71,7 +91,6 @@ function PublicRoute({ children }) {
 
 function FaviconLoader() {
   useEffect(() => {
-    // Use public endpoint so favicon loads even before login
     settingsAPI.getPublic().then(({ logo }) => {
       if (!logo) return;
       const link = document.getElementById('app-favicon');
