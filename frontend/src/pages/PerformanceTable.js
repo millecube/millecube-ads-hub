@@ -94,10 +94,10 @@ function InfoPopup({ row, onClose }) {
       const t = row.targeting;
       if (t.age_min || t.age_max) items.push(['Age', `${t.age_min || 18}–${t.age_max || 65}`]);
       if (t.genders?.length) items.push(['Gender', t.genders.map(g => g === 1 ? 'Male' : 'Female').join(', ')]);
-      const locCount = (t.geo_locations?.cities?.length || 0) + (t.geo_locations?.regions?.length || 0) + (t.geo_locations?.countries?.length || 0);
-      if (locCount > 0) items.push(['Locations', `${locCount} location(s)`]);
-      const intCount = t.flexible_spec?.reduce((s, g) => s + (g.interests?.length || 0), 0) || 0;
-      if (intCount > 0) items.push(['Interests', `${intCount} interest(s)`]);
+      const locs = [...(t.geo_locations?.cities?.map(x => x.name) || []), ...(t.geo_locations?.regions?.map(x => x.name) || []), ...(t.geo_locations?.countries?.map(x => x.name) || [])];
+      if (locs.length > 0) items.push(['Locations', locs.join(', ')]);
+      const interests = t.flexible_spec?.flatMap(g => g.interests?.map(i => i.name) || []) || [];
+      if (interests.length > 0) items.push(['Interests', interests.join(', ')]);
     }
   }
   return (
@@ -168,7 +168,12 @@ export default function PerformanceTable() {
   const [toggling, setToggling] = useState(new Set());
 
   const [colOrder, setColOrder] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('perf_col_order')) || DEFAULT_COL_ORDER; } catch { return DEFAULT_COL_ORDER; }
+    try {
+      const saved = JSON.parse(localStorage.getItem('perf_col_order'));
+      if (!saved) return DEFAULT_COL_ORDER;
+      const missing = DEFAULT_COL_ORDER.filter(k => !saved.includes(k));
+      return missing.length ? [...saved, ...missing] : saved;
+    } catch { return DEFAULT_COL_ORDER; }
   });
   const [colWidths, setColWidths] = useState(() => {
     try { return JSON.parse(localStorage.getItem('perf_col_widths')) || {}; } catch { return {}; }
@@ -650,7 +655,7 @@ export default function PerformanceTable() {
                               title="View settings"
                             >&#x24D8;</button>
                           )}
-                          {row.level === 0 && row.spend > 0 && row.waConvosStarted === 0 && row.repliedMessages === 0 && (
+                          {row.level === 0 && row.spend > 0 && (row.results == null || row.results === 0) && (
                             <span title="Spending but no results" style={{ flexShrink: 0 }}>&#x1F534;</span>
                           )}
                           {row.level === 0 && row.frequency > 3 && (
@@ -694,7 +699,7 @@ const st = {
   },
   rangeBtn: {
     padding: '6px 12px', borderRadius: 7, border: '1px solid rgba(50,205,50,0.15)',
-    background: 'none', color: 'rgba(232,245,233,0.5)', fontSize: 11, cursor: 'pointer', fontWeight: 600,
+    background: 'none', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', fontWeight: 600,
   },
   rangeBtnActive: {
     background: 'rgba(50,205,50,0.15)', color: '#32cd32', border: '1px solid rgba(50,205,50,0.35)',
@@ -725,11 +730,11 @@ const st = {
   },
   th: {
     padding: '12px 10px', textAlign: 'right', borderBottom: '2px solid rgba(50,205,50,0.2)',
-    borderRight: '1px solid rgba(50,205,50,0.05)', background: '#03140e',
+    borderRight: '1px solid rgba(50,205,50,0.05)', background: 'var(--card-bg, #03140e)',
     whiteSpace: 'nowrap',
   },
   thLabel: {
-    fontSize: 11, fontWeight: 700, color: 'rgba(232,245,233,0.5)',
+    fontSize: 11, fontWeight: 700, color: 'var(--text-muted)',
     textTransform: 'uppercase', letterSpacing: 0.8, fontFamily: 'Montserrat, sans-serif',
   },
   tdFrozen: {

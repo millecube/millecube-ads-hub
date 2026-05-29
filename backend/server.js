@@ -1283,9 +1283,19 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
     const cs = campMap[c.campaign_id] || {};
     const objective = cs.objective || '';
     const resolveResults = (m) => {
-      if (objective.includes('LEAD')) return { results: m.leads, costPerResult: m.leads > 0 ? m.spend / m.leads : 0 };
-      if (objective.includes('ENGAGEMENT') || objective.includes('POST')) return { results: m.postEngagement, costPerResult: m.postEngagement > 0 ? m.spend / m.postEngagement : 0 };
-      return { results: m.repliedMessages, costPerResult: m.repliedMessages > 0 ? m.spend / m.repliedMessages : 0 };
+      const obj = objective.toUpperCase();
+      if (obj.includes('LEAD'))
+        return { results: m.leads, costPerResult: m.leads > 0 ? m.spend / m.leads : 0 };
+      if (obj === 'MESSAGES' || obj === 'OUTCOME_ENGAGEMENT_MESSAGING')
+        return { results: m.waConvosStarted, costPerResult: m.waConvosStarted > 0 ? m.spend / m.waConvosStarted : 0 };
+      if (obj.includes('POST_ENGAGEMENT') || obj.includes('ENGAGEMENT'))
+        return { results: m.postEngagement, costPerResult: m.postEngagement > 0 ? m.spend / m.postEngagement : 0 };
+      if (obj.includes('VIDEO'))
+        return { results: m.videoViews, costPerResult: m.videoViews > 0 ? m.spend / m.videoViews : 0 };
+      if (obj.includes('TRAFFIC') || obj.includes('LINK_CLICK'))
+        return { results: m.linkClicks, costPerResult: m.linkClicks > 0 ? m.spend / m.linkClicks : 0 };
+      // Default: messaging conversations started
+      return { results: m.waConvosStarted, costPerResult: m.waConvosStarted > 0 ? m.spend / m.waConvosStarted : 0 };
     };
 
     const adsets = (adsetByCamp[c.campaign_id] || []).map(a => {
@@ -1781,7 +1791,7 @@ app.get('/api/performance/table', async (req, res) => {
     }
     const clients = (await Promise.all(visible.map(async (client) => {
       try {
-        const cacheKey = `perf_v1_${rangeKey}`;
+        const cacheKey = `perf_v2_${rangeKey}`;
         let cached = await getMonitorCache(client.id, cacheKey);
         if (!cached) {
           const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
