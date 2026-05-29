@@ -6,7 +6,8 @@ import { useSidebar } from '../context/SidebarContext';
 
 const nav = [
   { to: '/',          label: 'Dashboard', icon: '◈' },
-  { to: '/monitor',   label: 'Analytic',  icon: '◎' },
+  { to: '/monitor',     label: 'Analytic',    icon: '◎' },
+  { to: '/performance', label: 'Performance', icon: '▦' },
   { to: '/clients',   label: 'Clients',   icon: '◉' },
   { to: '/generate',  label: 'Generate',  icon: '▶' },
   { to: '/schedules', label: 'Schedules', icon: '◷' },

@@ -1185,6 +1185,111 @@ async function fetchAdLevel(client, dateStart, dateStop) {
   return res.data.data || [];
 }
 
+function extractPerfMetrics(row) {
+  const spend = parseFloat(row.spend || 0);
+  const impressions = parseFloat(row.impressions || 0);
+  const reach = parseFloat(row.reach || 0);
+  const clicks = parseFloat(row.clicks || 0);
+  const linkClicks = parseFloat(row.inline_link_clicks || 0);
+  const waConvosStarted   = extractAction(row.actions, 'onsite_conversion.messaging_conversation_started_7d');
+  const repliedMessages   = extractAction(row.actions, 'onsite_conversion.messaging_first_reply');
+  const newContacts       = extractAction(row.actions, 'onsite_conversion.messaging_new_connections');
+  const returningContacts = extractAction(row.actions, 'onsite_conversion.messaging_returning_connections');
+  return {
+    spend, impressions, reach,
+    frequency: reach > 0 ? impressions / reach : 0,
+    clicks,
+    ctr:    impressions > 0 ? clicks / impressions * 100 : 0,
+    cpm:    impressions > 0 ? spend  / impressions * 1000 : 0,
+    cpc:    clicks > 0      ? spend  / clicks : 0,
+    linkClicks,
+    ctrLink: impressions > 0 ? linkClicks / impressions * 100 : 0,
+    cpcLink: linkClicks > 0  ? spend / linkClicks : 0,
+    costPerMessage: repliedMessages > 0 ? spend / repliedMessages : 0,
+    waConvosStarted, repliedMessages, newContacts, returningContacts,
+  };
+}
+
+async function fetchPerfCampaignLevel(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'campaign', limit: 500,
+      fields: ['campaign_name','campaign_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchPerfAdsetLevel(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'adset', limit: 500,
+      fields: ['campaign_name','campaign_id','adset_name','adset_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchPerfAdLevel2(client, dateStart, dateStop) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+    params: {
+      access_token: client.accessToken,
+      time_range: JSON.stringify({ since: dateStart, until: dateStop }),
+      level: 'ad', limit: 500,
+      fields: ['campaign_name','campaign_id','adset_name','adset_id','ad_name','ad_id','spend','reach','impressions','clicks','ctr','cpm','cpc','frequency','inline_link_clicks','cost_per_inline_link_click','actions','cost_per_action_type'].join(',')
+    }
+  });
+  return res.data.data || [];
+}
+
+async function fetchCampaignStructure(client) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/campaigns`, {
+    params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,objective', limit: 500 }
+  });
+  return res.data.data || [];
+}
+
+async function fetchAdsetStructure(client) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/adsets`, {
+    params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,campaign_id', limit: 500 }
+  });
+  return res.data.data || [];
+}
+
+async function fetchAdStructure(client) {
+  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/ads`, {
+    params: { access_token: client.accessToken, fields: 'id,name,effective_status,adset_id', limit: 500 }
+  });
+  return res.data.data || [];
+}
+
+function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct) {
+  const campMap = {}; campStruct.forEach(c => { campMap[c.id] = c; });
+  const adsetMap = {}; adsetStruct.forEach(a => { adsetMap[a.id] = a; });
+  const adMap = {}; adStruct.forEach(a => { adMap[a.id] = a; });
+  const adsetByCamp = {}; adsetIns.forEach(a => { (adsetByCamp[a.campaign_id] = adsetByCamp[a.campaign_id] || []).push(a); });
+  const adByAdset = {}; adIns.forEach(a => { (adByAdset[a.adset_id] = adByAdset[a.adset_id] || []).push(a); });
+  const parseBudget = s => { const n = parseFloat(s || 0); return n > 0 ? n : null; };
+  return campIns.map(c => {
+    const cs = campMap[c.campaign_id] || {};
+    const adsets = (adsetByCamp[c.campaign_id] || []).map(a => {
+      const as2 = adsetMap[a.adset_id] || {};
+      const ads = (adByAdset[a.adset_id] || []).map(ad => {
+        const ads2 = adMap[ad.ad_id] || {};
+        return { id: ad.ad_id, name: ad.ad_name, status: ads2.effective_status || 'UNKNOWN', budget: null, ...extractPerfMetrics(ad) };
+      });
+      const db = parseBudget(as2.daily_budget), lb = parseBudget(as2.lifetime_budget);
+      return { id: a.adset_id, name: a.adset_name, status: as2.effective_status || 'UNKNOWN', budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null, ...extractPerfMetrics(a), ads };
+    });
+    const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
+    return { id: c.campaign_id, name: c.campaign_name, status: cs.effective_status || 'UNKNOWN', objective: cs.objective || '', budget: db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null, ...extractPerfMetrics(c), adsets };
+  });
+}
+
 async function fetchDailyTrend(client, dateStart, dateStop) {
   const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
     params: {
@@ -1630,6 +1735,63 @@ app.post('/api/monitor/actions/:actionId/replies', async (req, res) => {
     if (result.matchedCount === 0) return res.status(404).json({ error: 'Action not found' });
     res.json(reply);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Performance Table ─────────────────────────────────────────────────────────
+app.get('/api/performance/table', async (req, res) => {
+  try {
+    const { clientIds, range, dateStart: ds, dateStop: de } = req.query;
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const allClients = await readClients();
+    let visible = req.user.role === 'admin'
+      ? allClients
+      : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
+    if (clientIds && clientIds !== 'all') {
+      const ids = clientIds.split(',');
+      visible = visible.filter(c => ids.includes(c.id));
+    }
+    const clients = await Promise.all(visible.map(async (client) => {
+      const cacheKey = `perf_v1_${rangeKey}`;
+      let cached = await getMonitorCache(client.id, cacheKey);
+      if (!cached) {
+        const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
+          fetchPerfCampaignLevel(client, dateStart, dateStop),
+          fetchPerfAdsetLevel(client, dateStart, dateStop),
+          fetchPerfAdLevel2(client, dateStart, dateStop),
+          fetchCampaignStructure(client).catch(() => []),
+          fetchAdsetStructure(client).catch(() => []),
+          fetchAdStructure(client).catch(() => []),
+        ]);
+        cached = { campaigns: buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct), fetchedAt: new Date().toISOString() };
+        await setMonitorCache(client.id, cacheKey, cached);
+      }
+      return { clientId: client.id, clientCode: client.clientCode, clientName: client.name, campaigns: cached.campaigns || [] };
+    }));
+    res.json({ clients, dateStart, dateStop });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/performance/toggle', async (req, res) => {
+  try {
+    const { clientId, objectId, status } = req.body;
+    if (!clientId || !objectId || !['ACTIVE', 'PAUSED'].includes(status))
+      return res.status(400).json({ error: 'clientId, objectId, status (ACTIVE|PAUSED) required' });
+    const allClients = await readClients();
+    const client = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
+      return res.status(403).json({ error: 'Access denied' });
+    await axios.post(`https://graph.facebook.com/v19.0/${objectId}`, null, {
+      params: { access_token: client.accessToken, status }
+    });
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('monitorCache').deleteMany({ clientId: client.id, key: /^perf_/ });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+  }
 });
 
 // ── Budget: Helpers ───────────────────────────────────────────────────────────

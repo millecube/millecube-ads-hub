@@ -85,6 +85,11 @@ export const budgetAPI = {
   setEditors:(clientId, userIds)       => api.put(`/clients/${clientId}/budget-editors`, { userIds }).then(r => r.data),
 };
 
+export const performanceAPI = {
+  table:  (params) => api.get('/performance/table', { params }).then(r => r.data),
+  toggle: (data)   => api.post('/performance/toggle', data).then(r => r.data),
+};
+
 export const backendUrl = (filePath) => {
   const base = process.env.REACT_APP_API_URL || '';
   return `${base}${filePath}`;
