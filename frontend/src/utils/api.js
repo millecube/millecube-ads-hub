@@ -90,6 +90,13 @@ export const performanceAPI = {
   toggle: (data)   => api.post('/performance/toggle', data).then(r => r.data),
 };
 
+export const compareAPI = {
+  fetch:          (params)            => api.get('/compare', { params }).then(r => r.data),
+  getSettings:    ()                  => api.get('/compare/settings').then(r => r.data),
+  saveSettings:   (clientId, weights) => api.put(`/compare/settings/${clientId}`, { weights }).then(r => r.data),
+  updateBudget:   (data)              => api.patch('/compare/budget', data).then(r => r.data),
+};
+
 export const prefsAPI = {
   get:  ()     => api.get('/preferences').then(r => r.data),
   save: (data) => api.put('/preferences', data).then(r => r.data),

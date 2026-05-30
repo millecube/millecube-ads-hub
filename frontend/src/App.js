@@ -11,6 +11,7 @@ import History    from './pages/History';
 import Settings    from './pages/Settings';
 import AdsMonitor       from './pages/AdsMonitor';
 import PerformanceTable from './pages/PerformanceTable';
+import CompareMonitor   from './pages/CompareMonitor';
 import BudgetManager from './pages/BudgetManager';
 import Login         from './pages/Login';
 import ResetPassword from './pages/ResetPassword';
@@ -114,6 +115,7 @@ export default function App() {
                 <Route path="/"           element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/monitor"      element={<ProtectedRoute><AdsMonitor /></ProtectedRoute>} />
                 <Route path="/performance" element={<ProtectedRoute><PerformanceTable /></ProtectedRoute>} />
+                <Route path="/compare"     element={<ProtectedRoute><CompareMonitor /></ProtectedRoute>} />
                 <Route path="/clients"    element={<ProtectedRoute><Clients /></ProtectedRoute>} />
                 <Route path="/generate"   element={<ProtectedRoute><Generate /></ProtectedRoute>} />
                 <Route path="/schedules"  element={<ProtectedRoute><Schedules /></ProtectedRoute>} />

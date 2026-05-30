@@ -14,6 +14,7 @@ const SECTIONS = [
     children: [
       { to: '/monitor',     label: 'Dashboard',   icon: '◈' },
       { to: '/performance', label: 'Performance',  icon: '▦' },
+      { to: '/compare',     label: 'Monitor',      icon: '◬' },
     ],
   },
   {

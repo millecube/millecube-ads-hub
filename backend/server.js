@@ -1904,6 +1904,292 @@ app.post('/api/performance/toggle', async (req, res) => {
   }
 });
 
+// ── Compare Monitor ───────────────────────────────────────────────────────────
+
+function pctDelta(curr, prev) {
+  if (prev === null || prev === undefined || prev === 0) return null;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+function computeCompareHealth(curr, prev, thresholds, weights) {
+  const w = weights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
+  const t = thresholds || BENCH_DEFAULTS;
+  const signals = [];
+  let score = 0, totalWeight = 0;
+
+  if (curr.costPerResult > 0 && prev && prev.costPerResult > 0) {
+    const delta = pctDelta(curr.costPerResult, prev.costPerResult);
+    const bad = curr.costPerResult > t.cpr;
+    const sig = bad && delta > 10 ? 'red' : bad ? 'yellow' : delta <= -5 ? 'green' : delta < 5 ? 'grey' : 'yellow';
+    signals.push({ metric: 'costPerResult', delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.costPerResult;
+    totalWeight += w.costPerResult;
+  }
+
+  if (prev && prev.results > 0) {
+    const delta = pctDelta(curr.results || 0, prev.results);
+    const sig = delta >= 5 ? 'green' : delta >= -5 ? 'grey' : delta >= -15 ? 'yellow' : 'red';
+    signals.push({ metric: 'results', delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.results;
+    totalWeight += w.results;
+  }
+
+  if (prev && prev.ctr > 0) {
+    const delta = pctDelta(curr.ctr || 0, prev.ctr);
+    const bad = curr.ctr < t.ctr;
+    const sig = bad && delta < -10 ? 'red' : bad ? 'yellow' : delta >= 0 ? 'green' : delta >= -5 ? 'grey' : 'yellow';
+    signals.push({ metric: 'ctr', delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.ctr;
+    totalWeight += w.ctr;
+  }
+
+  if (prev && prev.cpm > 0) {
+    const delta = pctDelta(curr.cpm || 0, prev.cpm);
+    const bad = curr.cpm > t.cpm;
+    const sig = !bad && delta <= 0 ? 'green' : bad && delta > 10 ? 'red' : 'yellow';
+    signals.push({ metric: 'cpm', delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.cpm;
+    totalWeight += w.cpm;
+  }
+
+  if (prev && prev.frequency > 0) {
+    const delta = pctDelta(curr.frequency || 0, prev.frequency);
+    const bad = curr.frequency > t.frequency;
+    const sig = bad ? 'red' : delta > 15 ? 'yellow' : 'green';
+    signals.push({ metric: 'frequency', delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.frequency;
+    totalWeight += w.frequency;
+  }
+
+  const healthScore = totalWeight > 0 ? Math.round(score / totalWeight) : 50;
+  const reds = signals.filter(s => s.sig === 'red').length;
+  const greens = signals.filter(s => s.sig === 'green').length;
+  const freqRed = signals.find(s => s.metric === 'frequency' && s.sig === 'red');
+
+  let badge = 'KEEP';
+  if (reds >= 2 || healthScore < 35)       badge = 'PAUSE';
+  else if (reds === 1 && freqRed)          badge = 'REFRESH';
+  else if (reds === 1 || healthScore < 55) badge = 'WATCH';
+  else if (greens >= 3 && healthScore >= 75) badge = 'SCALE';
+
+  return { healthScore, signals, badge };
+}
+
+app.get('/api/compare', async (req, res) => {
+  try {
+    const { clientId, range, dateStart: ds, dateStop: de, level = 'campaign' } = req.query;
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+
+    const { dateStart, dateStop, rangeKey } = getMonitorDateRange(range, ds, de);
+    const prev = getPreviousPeriod(dateStart, dateStop);
+
+    const allClients = await readClients();
+    const client = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
+      return res.status(403).json({ error: 'Access denied' });
+
+    const cacheKey     = `compare_v2_${level}_${rangeKey}`;
+    const prevCacheKey = `compare_v2_prev_${level}_${rangeKey}`;
+    const structKey    = `struct_v2_${rangeKey}`;
+
+    let structData = await getMonitorCache(client.id, structKey);
+    if (!structData) {
+      const [campStruct, adsetStruct, adStruct] = await Promise.all([
+        fetchCampaignStructure(client).catch(() => []),
+        fetchAdsetStructure(client).catch(() => []),
+        fetchAdStructure(client).catch(() => []),
+      ]);
+      structData = { campStruct, adsetStruct, adStruct, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, structKey, structData);
+    }
+
+    let currData = await getMonitorCache(client.id, cacheKey);
+    if (!currData) {
+      let rows = [];
+      if (level === 'campaign')     rows = await fetchPerfCampaignLevel(client, dateStart, dateStop).catch(() => []);
+      else if (level === 'adset')   rows = await fetchPerfAdsetLevel(client, dateStart, dateStop).catch(() => []);
+      else                          rows = await fetchPerfAdLevel2(client, dateStart, dateStop).catch(() => []);
+      currData = { rows, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, cacheKey, currData);
+    }
+
+    let prevData = await getMonitorCache(client.id, prevCacheKey);
+    if (!prevData) {
+      let rows = [];
+      if (level === 'campaign')     rows = await fetchPerfCampaignLevel(client, prev.dateStart, prev.dateStop).catch(() => []);
+      else if (level === 'adset')   rows = await fetchPerfAdsetLevel(client, prev.dateStart, prev.dateStop).catch(() => []);
+      else                          rows = await fetchPerfAdLevel2(client, prev.dateStart, prev.dateStop).catch(() => []);
+      prevData = { rows, fetchedAt: new Date().toISOString() };
+      await setMonitorCache(client.id, prevCacheKey, prevData);
+    }
+
+    const campMap = {}, adsetMap = {}, adMapS = {};
+    (structData.campStruct || []).forEach(c => { campMap[c.id] = c; });
+    (structData.adsetStruct || []).forEach(a => { adsetMap[a.id] = a; });
+    (structData.adStruct || []).forEach(a => { adMapS[a.id] = a; });
+
+    const prevMap = {};
+    (prevData.rows || []).forEach(r => {
+      const id = level === 'campaign' ? r.campaign_id : level === 'adset' ? r.adset_id : r.ad_id;
+      prevMap[id] = r;
+    });
+
+    const parseBudget = s => { const n = parseFloat(s || 0); return n > 0 ? n / 100 : null; };
+
+    const rows = (currData.rows || []).map(r => {
+      const id   = level === 'campaign' ? r.campaign_id : level === 'adset' ? r.adset_id : r.ad_id;
+      const name = level === 'campaign' ? r.campaign_name : level === 'adset' ? r.adset_name : r.ad_name;
+
+      let status = 'UNKNOWN', budget = null, objective = '', optGoal = '';
+      let parentId = null, parentName = null;
+
+      if (level === 'campaign') {
+        const cs = campMap[r.campaign_id] || {};
+        status = cs.effective_status || 'UNKNOWN';
+        const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
+        budget = db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null;
+        objective = cs.objective || '';
+      } else if (level === 'adset') {
+        const as = adsetMap[r.adset_id] || {};
+        status = as.effective_status || 'UNKNOWN';
+        const db = parseBudget(as.daily_budget), lb = parseBudget(as.lifetime_budget);
+        budget = db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null;
+        optGoal = as.optimization_goal || '';
+        parentId = r.campaign_id;
+        parentName = r.campaign_name;
+      } else {
+        const ad = adMapS[r.ad_id] || {};
+        status = ad.effective_status || 'UNKNOWN';
+        parentId = r.adset_id;
+        parentName = r.adset_name;
+        optGoal = (adsetMap[r.adset_id] || {}).optimization_goal || '';
+        objective = '';
+      }
+
+      const curr = extractPerfMetrics(r);
+      const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+      let results = 0, costPerResult = 0;
+      if (actionType) {
+        const cpa = extractCostPerAction(r.cost_per_unique_action_type, actionType) ||
+                    extractCostPerAction(r.cost_per_action_type, actionType);
+        results = cpa > 0 ? Math.round(curr.spend / cpa) : extractAction(r.actions, actionType);
+        costPerResult = cpa || (results > 0 ? curr.spend / results : 0);
+      }
+
+      const prevRow = prevMap[id];
+      let prevM = null, prevResults = 0, prevCostPerResult = 0;
+      if (prevRow) {
+        prevM = extractPerfMetrics(prevRow);
+        if (actionType) {
+          const prevCpa = extractCostPerAction(prevRow.cost_per_unique_action_type, actionType) ||
+                          extractCostPerAction(prevRow.cost_per_action_type, actionType);
+          prevResults = prevCpa > 0 ? Math.round(prevM.spend / prevCpa) : extractAction(prevRow.actions, actionType);
+          prevCostPerResult = prevCpa || (prevResults > 0 ? prevM.spend / prevResults : 0);
+        }
+      }
+
+      const deltas = prevM ? {
+        spend:         pctDelta(curr.spend,        prevM.spend),
+        results:       pctDelta(results,            prevResults),
+        ctr:           pctDelta(curr.ctr,           prevM.ctr),
+        cpm:           pctDelta(curr.cpm,           prevM.cpm),
+        frequency:     pctDelta(curr.frequency,     prevM.frequency),
+        costPerResult: pctDelta(costPerResult,       prevCostPerResult),
+        impressions:   pctDelta(curr.impressions,   prevM.impressions),
+        reach:         pctDelta(curr.reach,         prevM.reach),
+      } : null;
+
+      const { healthScore, signals, badge } = computeCompareHealth(
+        { ...curr, results, costPerResult },
+        prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
+        client.thresholds || null,
+        client.compareWeights || null
+      );
+
+      return {
+        id, name, status, budget, level,
+        objective: objective || optGoal, parentId, parentName,
+        curr: { ...curr, results, costPerResult },
+        prev: prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
+        deltas, healthScore, signals, badge,
+      };
+    });
+
+    res.json({
+      rows, level, dateStart, dateStop,
+      prevDateStart: prev.dateStart, prevDateStop: prev.dateStop,
+      client: { id: client.id, clientCode: client.clientCode, name: client.name, compareWeights: client.compareWeights || null },
+      cachedAt: currData.fetchedAt,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/compare/settings', async (req, res) => {
+  try {
+    const allClients = await readClients();
+    const visible = req.user.role === 'admin'
+      ? allClients
+      : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
+    const settings = visible.map(c => ({
+      id: c.id, name: c.name, clientCode: c.clientCode,
+      weights: c.compareWeights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 },
+      thresholds: c.thresholds || BENCH_DEFAULTS,
+    }));
+    res.json({ settings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/compare/settings/:clientId', requireAdmin, async (req, res) => {
+  try {
+    const { weights } = req.body;
+    if (!weights) return res.status(400).json({ error: 'weights required' });
+    const total = Object.values(weights).reduce((s, v) => s + Number(v), 0);
+    if (Math.abs(total - 100) > 1) return res.status(400).json({ error: 'Weights must sum to 100' });
+
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('clients').updateOne({ id: req.params.clientId }, { $set: { compareWeights: weights } });
+    } else {
+      const clients = fileRead(FILE.clients);
+      const idx = clients.findIndex(c => c.id === req.params.clientId);
+      if (idx === -1) return res.status(404).json({ error: 'Client not found' });
+      clients[idx].compareWeights = weights;
+      fileWrite(FILE.clients, clients);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/compare/budget', async (req, res) => {
+  try {
+    const { clientId, objectId, budgetType, budgetAmount } = req.body;
+    if (!clientId || !objectId || !budgetType || budgetAmount === undefined)
+      return res.status(400).json({ error: 'clientId, objectId, budgetType, budgetAmount required' });
+
+    const allClients = await readClients();
+    const client = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
+      return res.status(403).json({ error: 'Access denied' });
+
+    const amountCents = Math.round(parseFloat(budgetAmount) * 100);
+    const params = { access_token: client.accessToken };
+    if (budgetType === 'daily')    params.daily_budget    = amountCents;
+    else                           params.lifetime_budget = amountCents;
+
+    await axios.post(`https://graph.facebook.com/v19.0/${objectId}`, null, { params });
+
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('monitorCache').deleteMany({ clientId: client.id, rangeKey: /^compare_v2_/ });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
 // ── Budget: Helpers ───────────────────────────────────────────────────────────
 
 function getCurrentMonthStr() {
