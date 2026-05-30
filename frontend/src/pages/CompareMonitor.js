@@ -35,6 +35,36 @@ const BADGE_META = {
 
 const WEIGHT_DEFAULTS = { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
 
+const DEFAULT_COLUMNS = [
+  { key: 'status',        label: 'Status',      width: 80  },
+  { key: 'budget',        label: 'Budget',       width: 110 },
+  { key: 'spend',         label: 'Spend',        width: 100 },
+  { key: 'results',       label: 'Results',      width: 100 },
+  { key: 'ctr',           label: 'CTR',          width: 90  },
+  { key: 'cpm',           label: 'CPM',          width: 90  },
+  { key: 'frequency',     label: 'Freq',         width: 90  },
+  { key: 'costPerResult', label: 'Cost/Result',  width: 120 },
+  { key: 'health',        label: 'Health',       width: 80  },
+  { key: 'badge',         label: 'Badge',        width: 90  },
+  { key: 'toggle',        label: 'On/Off',       width: 70  },
+];
+
+function loadColConfig() {
+  try {
+    const saved = localStorage.getItem('cm_columns');
+    if (!saved) return DEFAULT_COLUMNS.map(c => ({ ...c, on: true }));
+    const parsed = JSON.parse(saved);
+    const merged = DEFAULT_COLUMNS.map(d => ({ ...d, on: parsed.find(p => p.key === d.key)?.on ?? true }));
+    const order = parsed.map(p => p.key);
+    merged.sort((a, b) => {
+      const ai = order.indexOf(a.key), bi = order.indexOf(b.key);
+      if (ai === -1) return 1; if (bi === -1) return -1;
+      return ai - bi;
+    });
+    return merged;
+  } catch { return DEFAULT_COLUMNS.map(c => ({ ...c, on: true })); }
+}
+
 const DELTA_DEFAULTS = {
   costPerResult: { good: 5,  bad: 10 },
   results:       { good: 5,  bad: 15 },
@@ -100,11 +130,62 @@ function DeltaCell({ curr, delta, format, lowerIsBetter, thresholds, base }) {
   );
 }
 
-function SpendCell({ curr }) {
+function SpendDeltaCell({ curr, delta }) {
+  const sign = delta > 0 ? '+' : '';
   return (
     <td style={tds.metricCell}>
       <div style={tds.currVal}>{curr != null && curr > 0 ? fmtRM(curr) : '—'}</div>
+      {delta !== null && delta !== undefined ? (
+        <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 1 }}>
+          {delta > 0 ? '↑' : '↓'} {sign}{delta.toFixed(1)}%
+        </div>
+      ) : null}
     </td>
+  );
+}
+
+function ColumnsModal({ colConfig, onApply, onClose }) {
+  const [local, setLocal] = useState(colConfig);
+  const toggle = key => setLocal(p => p.map(c => c.key === key ? { ...c, on: !c.on } : c));
+  const move = (key, dir) => setLocal(p => {
+    const idx = p.findIndex(c => c.key === key);
+    const next = idx + dir;
+    if (next < 0 || next >= p.length) return p;
+    const copy = [...p]; [copy[idx], copy[next]] = [copy[next], copy[idx]]; return copy;
+  });
+  const apply = () => {
+    localStorage.setItem('cm_columns', JSON.stringify(local.map(c => ({ key: c.key, on: c.on }))));
+    onApply(local); onClose();
+  };
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box glass" style={{ maxWidth: 340, width: '100%', margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>📊 Columns</h3>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>Toggle and reorder. Name is always shown.</p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {local.map((col, i) => (
+            <div key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 8, background: 'rgba(50,205,50,0.04)', border: '1px solid rgba(50,205,50,0.08)' }}>
+              <input type="checkbox" checked={col.on} onChange={() => toggle(col.key)} style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
+              <span style={{ flex: 1, fontSize: 13, color: col.on ? 'var(--text-secondary)' : 'var(--text-dim)', fontWeight: col.on ? 600 : 400 }}>{col.label}</span>
+              <div style={{ display: 'flex', gap: 2 }}>
+                <button onClick={() => move(col.key, -1)} disabled={i === 0} style={{ background: 'none', border: 'none', cursor: i === 0 ? 'not-allowed' : 'pointer', color: 'var(--text-dim)', fontSize: 11, padding: '2px 5px', opacity: i === 0 ? 0.3 : 0.8 }}>▲</button>
+                <button onClick={() => move(col.key, 1)} disabled={i === local.length - 1} style={{ background: 'none', border: 'none', cursor: i === local.length - 1 ? 'not-allowed' : 'pointer', color: 'var(--text-dim)', fontSize: 11, padding: '2px 5px', opacity: i === local.length - 1 ? 0.3 : 0.8 }}>▼</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 14 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setLocal(DEFAULT_COLUMNS.map(d => ({ ...d, on: true })))}>↺ Reset</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary btn-sm" onClick={apply}>Apply</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -432,10 +513,18 @@ function WeightsModal({ onClose, onSaved }) {
   const total  = (id) => Object.values(drafts[id] || {}).reduce((s, v) => s + Number(v), 0);
   const gTotal = ()   => Object.values(gDraftW || {}).reduce((s, v) => s + Number(v), 0);
 
-  const resetClient = (id) => {
-    setDrafts(p => ({ ...p, [id]: { ...WEIGHT_DEFAULTS } }));
-    setDraftThresholds(p => ({ ...p, [id]: mkDT(null) }));
-    setDraftBase(p => ({ ...p, [id]: mkDB(null) }));
+  const resetClient = async (id) => {
+    const resetW  = { ...(gDraftW  || WEIGHT_DEFAULTS) };
+    const resetDT = { ...(gDraftDT || mkDT(null)) };
+    const resetDB = { ...(gDraftB  || mkDB(null)) };
+    setDrafts(p => ({ ...p, [id]: resetW }));
+    setDraftThresholds(p => ({ ...p, [id]: resetDT }));
+    setDraftBase(p => ({ ...p, [id]: resetDB }));
+    try {
+      await compareAPI.saveSettings(id, resetW, resetDT, resetDB);
+      toast('Reset to defaults and saved.', 'success');
+      onSaved();
+    } catch (err) { toast(err.response?.data?.error || 'Reset failed', 'error'); }
   };
 
   const handleSave = (id) => {
@@ -570,6 +659,7 @@ function WeightsModal({ onClose, onSaved }) {
                         <span style={{ fontSize: 9, color: '#32cd32' }}>{isExpanded ? '▼' : '▶'}</span>
                         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{s.name}</span>
                         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.clientCode}</span>
+                        {!s.hasCustom && <span style={{ fontSize: 9, color: '#a0a0ff', background: 'rgba(160,160,255,0.1)', borderRadius: 4, padding: '1px 5px' }}>using defaults</span>}
                       </div>
                       <span style={{ fontSize: 11, fontWeight: 700, color: valid ? '#32cd32' : '#ff4d4d' }}>Total: {t}</span>
                     </button>
@@ -751,6 +841,7 @@ export default function CompareMonitor() {
   const toast = useToast();
   const { user } = useAuth();
 
+  const [colConfig,   setColConfig]   = useState(loadColConfig);
   const [clients,     setClients]     = useState([]);
   const [clientId,    setClientId]    = useState(() => localStorage.getItem('cm_clientId') || '');
   const [period,      setPeriod]      = useState(() => localStorage.getItem('cm_period') || '7d');
@@ -779,6 +870,7 @@ export default function CompareMonitor() {
 
   // Modals
   const [showWeights,  setShowWeights]  = useState(false);
+  const [showColumns,  setShowColumns]  = useState(false);
   const [showGuide,    setShowGuide]    = useState(false);
   const [editBudget,   setEditBudget]   = useState(null);
   const [infoRow,      setInfoRow]      = useState(null);
@@ -965,6 +1057,9 @@ export default function CompareMonitor() {
   const activeFiltersCount = [search, statusFlt !== 'all', minSpend, badgeFlt !== 'all'].filter(Boolean).length;
   const selectedCount = selected.size;
 
+  // ── Column count for colSpan ──────────────────────────────────────────────────
+  const visibleColCount = useMemo(() => 2 + colConfig.filter(c => c.on).length, [colConfig]);
+
   // ── Delta thresholds (from API or defaults) ────────────────────────────────────
 
   const deltaThresholds = useMemo(() => {
@@ -991,10 +1086,81 @@ export default function CompareMonitor() {
 
   // ── Row renderer ───────────────────────────────────────────────────────────────
 
+  const renderColHeader = (col) => {
+    switch (col.key) {
+      case 'status':        return <Th key="status"        col="status"              style={{ width: col.width }}>Status</Th>;
+      case 'budget':        return <Th key="budget"        col="budget"              style={{ width: col.width }}>Budget</Th>;
+      case 'spend':         return <Th key="spend"         col="curr.spend"          style={{ width: col.width }}>Spend</Th>;
+      case 'results':       return <Th key="results"       col="curr.results"        style={{ width: col.width }}>Results</Th>;
+      case 'ctr':           return <Th key="ctr"           col="curr.ctr"            style={{ width: col.width }}>CTR</Th>;
+      case 'cpm':           return <Th key="cpm"           col="curr.cpm"            style={{ width: col.width }}>CPM</Th>;
+      case 'frequency':     return <Th key="frequency"     col="curr.frequency"      style={{ width: col.width }}>Freq</Th>;
+      case 'costPerResult': return <Th key="costPerResult" col="curr.costPerResult"  style={{ width: col.width }}>Cost/Result</Th>;
+      case 'health':        return <Th key="health"        col="healthScore"         style={{ width: col.width }}>Health</Th>;
+      case 'badge':         return <Th key="badge"         col="badge"               style={{ width: col.width }}>Badge</Th>;
+      case 'toggle':        return <th  key="toggle"                                 style={tds.th}>On/Off</th>;
+      default: return null;
+    }
+  };
+
   const renderRow = (row) => {
     const isSelected = selected.has(row.id);
     const bm = BADGE_META[row.badge] || BADGE_META.KEEP;
     const hasInfo = row.level === 'campaign' || row.level === 'adset';
+
+    const renderCell = (col) => {
+      switch (col.key) {
+        case 'status': return (
+          <td key="status" style={tds.metricCell}>
+            <span style={{
+              fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
+              background: row.status === 'ACTIVE' ? 'rgba(50,205,50,0.15)' : 'rgba(136,136,136,0.12)',
+              color: row.status === 'ACTIVE' ? '#32cd32' : '#888',
+            }}>
+              {row.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'}
+            </span>
+          </td>
+        );
+        case 'budget': return (
+          <td key="budget" style={tds.metricCell}>
+            {row.budget
+              ? <BudgetChip row={row} onEdit={setEditBudget} />
+              : <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>}
+          </td>
+        );
+        case 'spend': return <SpendDeltaCell key="spend" curr={row.curr.spend} delta={row.deltas?.spend} />;
+        case 'results': return <DeltaCell key="results" curr={row.curr.results} delta={row.deltas?.results} format={fmtNum} lowerIsBetter={false} thresholds={deltaThresholds.results} base={baseThresholds.results} />;
+        case 'ctr': return <DeltaCell key="ctr" curr={row.curr.ctr} delta={row.deltas?.ctr} format={fmtPct} lowerIsBetter={false} thresholds={deltaThresholds.ctr} base={baseThresholds.ctr} />;
+        case 'cpm': return <DeltaCell key="cpm" curr={row.curr.cpm} delta={row.deltas?.cpm} format={fmtRM} lowerIsBetter={true} thresholds={deltaThresholds.cpm} base={baseThresholds.cpm} />;
+        case 'frequency': return <DeltaCell key="frequency" curr={row.curr.frequency} delta={row.deltas?.frequency} format={v => v.toFixed(2)} lowerIsBetter={true} thresholds={deltaThresholds.frequency} base={baseThresholds.frequency} />;
+        case 'costPerResult': return <DeltaCell key="costPerResult" curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM} lowerIsBetter={true} thresholds={deltaThresholds.costPerResult} base={baseThresholds.costPerResult} />;
+        case 'health': return (
+          <td key="health" style={tds.metricCell}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ color: healthDot(row.healthScore), fontSize: 8 }}>●</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: healthDot(row.healthScore) }}>{row.healthScore}</span>
+            </div>
+          </td>
+        );
+        case 'badge': return (
+          <td key="badge" style={tds.metricCell}>
+            <span style={{
+              fontSize: 10, fontWeight: 800, letterSpacing: 0.4,
+              color: bm.color, background: bm.bg,
+              borderRadius: 4, padding: '3px 7px',
+            }}>
+              {bm.label}
+            </span>
+          </td>
+        );
+        case 'toggle': return (
+          <td key="toggle" style={{ padding: '10px 12px', textAlign: 'center' }}>
+            <ToggleBtn row={row} clientId={clientId} onDone={fetchData} />
+          </td>
+        );
+        default: return null;
+      }
+    };
 
     return (
       <tr key={row.id} style={{ background: isSelected ? 'rgba(50,205,50,0.05)' : undefined }}>
@@ -1002,7 +1168,6 @@ export default function CompareMonitor() {
           <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)}
             style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
         </td>
-
         <td style={tds.nameCell}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
             <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.3, flex: 1, wordBreak: 'break-word' }}>
@@ -1024,50 +1189,7 @@ export default function CompareMonitor() {
             )}
           </div>
         </td>
-
-        <td style={tds.metricCell}>
-          <span style={{
-            fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
-            background: row.status === 'ACTIVE' ? 'rgba(50,205,50,0.15)' : 'rgba(136,136,136,0.12)',
-            color: row.status === 'ACTIVE' ? '#32cd32' : '#888',
-          }}>
-            {row.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'}
-          </span>
-        </td>
-
-        <td style={tds.metricCell}>
-          {row.budget
-            ? <BudgetChip row={row} onEdit={setEditBudget} />
-            : <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>}
-        </td>
-
-        <SpendCell curr={row.curr.spend} />
-        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} thresholds={deltaThresholds.results}       base={baseThresholds.results} />
-        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} thresholds={deltaThresholds.ctr}           base={baseThresholds.ctr} />
-        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.cpm}           base={baseThresholds.cpm} />
-        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} thresholds={deltaThresholds.frequency}  base={baseThresholds.frequency} />
-        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.costPerResult}  base={baseThresholds.costPerResult} />
-
-        <td style={tds.metricCell}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ color: healthDot(row.healthScore), fontSize: 8 }}>●</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: healthDot(row.healthScore) }}>{row.healthScore}</span>
-          </div>
-        </td>
-
-        <td style={tds.metricCell}>
-          <span style={{
-            fontSize: 10, fontWeight: 800, letterSpacing: 0.4,
-            color: bm.color, background: bm.bg,
-            borderRadius: 4, padding: '3px 7px',
-          }}>
-            {bm.label}
-          </span>
-        </td>
-
-        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-          <ToggleBtn row={row} clientId={clientId} onDone={fetchData} />
-        </td>
+        {colConfig.filter(c => c.on).map(renderCell)}
       </tr>
     );
   };
@@ -1094,6 +1216,7 @@ export default function CompareMonitor() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowGuide(true)}>🎨 Colour Guide</button>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowWeights(true)}>⚖️ Health Rules</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowColumns(true)}>📊 Columns</button>
           <button className="btn btn-ghost btn-sm" onClick={fetchData} disabled={loading}>
             {loading ? <div className="spinner" style={{ width: 13, height: 13 }} /> : '↻'} Refresh
           </button>
@@ -1233,25 +1356,15 @@ export default function CompareMonitor() {
         ) : filteredRows.length === 0 ? (
           <div style={s.center}>No data matches your filters.</div>
         ) : (
-          <table className="data-table" style={{ minWidth: 1050 }}>
+          <table className="data-table" style={{ minWidth: 600 }}>
             <thead>
               <tr>
                 <th style={{ width: 36, padding: '10px 8px' }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleAll}
                     style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
                 </th>
-                <Th col="name"              style={{ minWidth: 200 }}>Name</Th>
-                <Th col="status"            style={{ width: 80 }}>Status</Th>
-                <Th col="budget"            style={{ width: 110 }}>Budget</Th>
-                <Th col="curr.spend"        style={{ width: 90 }}>Spend</Th>
-                <Th col="curr.results"      style={{ width: 100 }}>Results</Th>
-                <Th col="curr.ctr"          style={{ width: 90 }}>CTR</Th>
-                <Th col="curr.cpm"          style={{ width: 90 }}>CPM</Th>
-                <Th col="curr.frequency"    style={{ width: 90 }}>Freq</Th>
-                <Th col="curr.costPerResult" style={{ width: 120 }}>Cost/Result</Th>
-                <Th col="healthScore"       style={{ width: 80 }}>Health</Th>
-                <Th col="badge"             style={{ width: 90 }}>Badge</Th>
-                <th style={tds.th}>On/Off</th>
+                <Th col="name" style={{ minWidth: 200 }}>Name</Th>
+                {colConfig.filter(c => c.on).map(renderColHeader)}
               </tr>
             </thead>
             <tbody>
@@ -1260,7 +1373,7 @@ export default function CompareMonitor() {
                   {/* Group header — shown for adset / ad levels */}
                   {group.label && (
                     <tr style={{ background: 'rgba(50,205,50,0.05)', borderTop: '1px solid rgba(50,205,50,0.1)' }}>
-                      <td colSpan={13} style={{ padding: '7px 12px' }}>
+                      <td colSpan={visibleColCount} style={{ padding: '7px 12px' }}>
                         <button
                           onClick={() => toggleGroup(group.key)}
                           style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 12 }}
@@ -1285,7 +1398,7 @@ export default function CompareMonitor() {
                   {!collapsedGroups.has(group.key) && group.pausedRows.length > 0 && (
                     <>
                       <tr style={{ background: 'rgba(136,136,136,0.04)' }}>
-                        <td colSpan={13} style={{ padding: `5px 12px 5px ${group.label ? '28px' : '12px'}` }}>
+                        <td colSpan={visibleColCount} style={{ padding: `5px 12px 5px ${group.label ? '28px' : '12px'}` }}>
                           <button
                             onClick={() => togglePaused(group.key)}
                             style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-dim)', fontSize: 11 }}
@@ -1316,6 +1429,9 @@ export default function CompareMonitor() {
       )}
 
       {/* Modals */}
+      {showColumns && (
+        <ColumnsModal colConfig={colConfig} onApply={setColConfig} onClose={() => setShowColumns(false)} />
+      )}
       {creativeRow && (
         <AdCreativeModal
           adId={creativeRow.id} adName={creativeRow.name} clientId={clientId}

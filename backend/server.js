@@ -2004,6 +2004,20 @@ app.get('/api/compare', async (req, res) => {
     if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
       return res.status(403).json({ error: 'Access denied' });
 
+    // Load saved global defaults as fallback for health computation
+    let globalDef = { weights: WEIGHT_DEFAULTS, deltaThresholds: DELTA_DEFAULTS, baseThresholds: BASE_DEFAULTS };
+    if (usingMongo()) {
+      try {
+        const gdb = await getDb();
+        const gdoc = await gdb.collection('settings').findOne({ _id: 'compareGlobalDefaults' });
+        if (gdoc) globalDef = {
+          weights: gdoc.weights || WEIGHT_DEFAULTS,
+          deltaThresholds: gdoc.deltaThresholds || DELTA_DEFAULTS,
+          baseThresholds: gdoc.baseThresholds || BASE_DEFAULTS,
+        };
+      } catch {}
+    }
+
     const cacheKey     = `compare_v2_${level}_${rangeKey}`;
     const prevCacheKey = `compare_v2_prev_${level}_${rangeKey}`;
     const structKey    = `struct_v2_${rangeKey}`;
@@ -2124,9 +2138,9 @@ app.get('/api/compare', async (req, res) => {
       const { healthScore, signals, badge } = computeCompareHealth(
         { ...curr, results, costPerResult },
         prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
-        client.compareDeltaThresholds || null,
-        client.compareWeights || null,
-        client.compareBaseThresholds || null
+        client.compareDeltaThresholds || globalDef.deltaThresholds,
+        client.compareWeights || globalDef.weights,
+        client.compareBaseThresholds || globalDef.baseThresholds
       );
 
       return {
@@ -2153,18 +2167,25 @@ app.get('/api/compare/settings', async (req, res) => {
     const visible = req.user.role === 'admin'
       ? allClients
       : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
-    const settings = visible.map(c => ({
-      id: c.id, name: c.name, clientCode: c.clientCode,
-      weights: c.compareWeights || WEIGHT_DEFAULTS,
-      deltaThresholds: c.compareDeltaThresholds || DELTA_DEFAULTS,
-      baseThresholds: c.compareBaseThresholds || BASE_DEFAULTS,
-    }));
-    let globalDefaults = null;
-    if (req.user.role === 'admin' && usingMongo()) {
+
+    // Load saved global defaults to use as per-client fallback
+    let savedGlobal = null;
+    if (usingMongo()) {
       const db = await getDb();
       const doc = await db.collection('settings').findOne({ _id: 'compareGlobalDefaults' });
-      if (doc) globalDefaults = { weights: doc.weights, deltaThresholds: doc.deltaThresholds, baseThresholds: doc.baseThresholds };
+      if (doc) savedGlobal = { weights: doc.weights, deltaThresholds: doc.deltaThresholds, baseThresholds: doc.baseThresholds };
     }
+    const fallback = savedGlobal || { weights: WEIGHT_DEFAULTS, deltaThresholds: DELTA_DEFAULTS, baseThresholds: BASE_DEFAULTS };
+
+    const settings = visible.map(c => ({
+      id: c.id, name: c.name, clientCode: c.clientCode,
+      weights: c.compareWeights || fallback.weights,
+      deltaThresholds: c.compareDeltaThresholds || fallback.deltaThresholds,
+      baseThresholds: c.compareBaseThresholds || fallback.baseThresholds,
+      hasCustom: !!c.compareWeights,
+    }));
+    // Only expose globalDefaults field to admins (for the admin config panel)
+    const globalDefaults = req.user.role === 'admin' ? savedGlobal : null;
     res.json({ settings, globalDefaults });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
