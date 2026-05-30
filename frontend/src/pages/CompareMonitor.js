@@ -33,6 +33,8 @@ const BADGE_META = {
   REFRESH: { color: '#ff8c00',  bg: 'rgba(255,140,0,0.15)',   label: 'REFRESH' },
 };
 
+const WEIGHT_DEFAULTS = { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
+
 const DELTA_DEFAULTS = {
   costPerResult: { good: 5,  bad: 10 },
   results:       { good: 5,  bad: 15 },
@@ -41,20 +43,37 @@ const DELTA_DEFAULTS = {
   frequency:     { good: 5,  bad: 15 },
 };
 
-function getDeltaColor(delta, lowerIsBetter, thresholds) {
+const BASE_DEFAULTS = {
+  costPerResult: { value: 30,  enabled: true },
+  results:       { value: 10,  enabled: true },
+  ctr:           { value: 1.5, enabled: true },
+  cpm:           { value: 20,  enabled: true },
+  frequency:     { value: 2.5, enabled: true },
+};
+
+function getDeltaColor(delta, lowerIsBetter, thresholds, base, currVal) {
   if (delta === null || delta === undefined) return { color: 'var(--text-dim)', arrow: '—' };
   const t = thresholds || { good: 2, bad: 10 };
+  let color, arrow;
   if (lowerIsBetter) {
-    if (delta >= t.bad)        return { color: '#ff4d4d', arrow: '↑' };
-    if (delta <= -t.good)      return { color: '#32cd32', arrow: '↓' };
-    if (Math.abs(delta) <= 2)  return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
-    return { color: '#f0a500', arrow: delta > 0 ? '↑' : '↓' };
+    if (delta >= t.bad)        { color = '#ff4d4d'; arrow = '↑'; }
+    else if (delta <= -t.good) { color = '#32cd32'; arrow = '↓'; }
+    else if (Math.abs(delta) <= 2) { color = 'rgba(232,245,233,0.3)'; arrow = '→'; }
+    else { color = '#f0a500'; arrow = delta > 0 ? '↑' : '↓'; }
   } else {
-    if (delta <= -t.bad)       return { color: '#ff4d4d', arrow: '↓' };
-    if (delta >= t.good)       return { color: '#32cd32', arrow: '↑' };
-    if (Math.abs(delta) <= 2)  return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
-    return { color: '#f0a500', arrow: delta > 0 ? '↑' : '↓' };
+    if (delta <= -t.bad)       { color = '#ff4d4d'; arrow = '↓'; }
+    else if (delta >= t.good)  { color = '#32cd32'; arrow = '↑'; }
+    else if (Math.abs(delta) <= 2) { color = 'rgba(232,245,233,0.3)'; arrow = '→'; }
+    else { color = '#f0a500'; arrow = delta > 0 ? '↑' : '↓'; }
   }
+  if (base?.enabled && currVal != null) {
+    const withinBase = lowerIsBetter ? currVal <= base.value : currVal >= base.value;
+    if (withinBase) {
+      if (color === '#ff4d4d')  color = '#f0a500';
+      else if (color === '#f0a500') color = 'rgba(232,245,233,0.3)';
+    }
+  }
+  return { color, arrow };
 }
 
 function healthDot(score) {
@@ -66,8 +85,8 @@ function healthDot(score) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function DeltaCell({ curr, delta, format, lowerIsBetter, thresholds }) {
-  const { color, arrow } = getDeltaColor(delta, lowerIsBetter, thresholds);
+function DeltaCell({ curr, delta, format, lowerIsBetter, thresholds, base }) {
+  const { color, arrow } = getDeltaColor(delta, lowerIsBetter, thresholds, base, curr);
   const sign = delta > 0 ? '+' : '';
   return (
     <td style={tds.metricCell}>
@@ -175,7 +194,7 @@ function AdCreativeModal({ adId, adName, clientId, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 480, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 480, width: '100%', margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>🖼️ Ad Preview</h3>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -303,10 +322,23 @@ function InfoModal({ row, onClose }) {
     ];
     return parts.length ? parts.slice(0, 6).join(', ') + (parts.length > 6 ? ` +${parts.length - 6} more` : '') : '—';
   };
+  const formatInterests = t => {
+    if (!t) return null;
+    const names = [];
+    if (Array.isArray(t.flexible_spec)) {
+      t.flexible_spec.forEach(spec => {
+        if (Array.isArray(spec.interests)) spec.interests.forEach(i => names.push(i.name));
+      });
+    }
+    if (Array.isArray(t.interests)) t.interests.forEach(i => names.push(i.name));
+    return names.length ? names.slice(0, 8).join(', ') + (names.length > 8 ? ` +${names.length - 8} more` : '') : null;
+  };
+
+  const interests = formatInterests(targeting);
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 400, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 400, width: '100%', margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>
             {row.level === 'campaign' ? '📢 Campaign Info' : '🎯 Ad Set Info'}
@@ -326,6 +358,7 @@ function InfoModal({ row, onClose }) {
               <InfoKV label="Age Range"  value={formatAge(targeting)} />
               <InfoKV label="Genders"    value={formatGenders(targeting)} />
               <InfoKV label="Locations"  value={formatLocations(targeting)} />
+              {interests && <InfoKV label="Interests" value={interests} />}
             </>}
           </>
         )}
@@ -337,84 +370,153 @@ function InfoModal({ row, onClose }) {
 // ── Health Rules Modal ─────────────────────────────────────────────────────────
 
 const WEIGHT_KEYS = [
-  { key: 'costPerResult', label: 'Cost / Result', lowerIsBetter: true  },
-  { key: 'results',       label: 'Results',       lowerIsBetter: false },
-  { key: 'ctr',           label: 'CTR',           lowerIsBetter: false },
-  { key: 'cpm',           label: 'CPM',           lowerIsBetter: true  },
-  { key: 'frequency',     label: 'Frequency',     lowerIsBetter: true  },
+  { key: 'costPerResult', label: 'Cost / Result', lowerIsBetter: true,  unit: 'RM'  },
+  { key: 'results',       label: 'Results',       lowerIsBetter: false, unit: 'num' },
+  { key: 'ctr',           label: 'CTR',           lowerIsBetter: false, unit: '%'   },
+  { key: 'cpm',           label: 'CPM',           lowerIsBetter: true,  unit: 'RM'  },
+  { key: 'frequency',     label: 'Frequency',     lowerIsBetter: true,  unit: 'num' },
 ];
 
 function WeightsModal({ onClose, onSaved }) {
   const toast = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [settings,       setSettings]       = useState([]);
-  const [loading,        setLoading]        = useState(true);
-  const [saving,         setSaving]         = useState(null);
-  const [confirm,        setConfirm]        = useState(null);
-  const [drafts,         setDrafts]         = useState({});
+
+  const [settings,     setSettings]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [saving,       setSaving]       = useState(null);
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [confirm,      setConfirm]      = useState(null);
+  const [expandedId,   setExpandedId]   = useState(null);
+  const [showGlobal,   setShowGlobal]   = useState(false);
+
+  const [drafts,          setDrafts]          = useState({});
   const [draftThresholds, setDraftThresholds] = useState({});
+  const [draftBase,       setDraftBase]       = useState({});
+
+  const [gDraftW,  setGDraftW]  = useState(null);
+  const [gDraftDT, setGDraftDT] = useState(null);
+  const [gDraftB,  setGDraftB]  = useState(null);
+
+  const mkDT = (saved) => WEIGHT_KEYS.reduce((acc, { key }) => ({ ...acc, [key]: { ...DELTA_DEFAULTS[key], ...(saved?.[key] || {}) } }), {});
+  const mkDB = (saved) => WEIGHT_KEYS.reduce((acc, { key }) => ({ ...acc, [key]: { ...BASE_DEFAULTS[key],  ...(saved?.[key] || {}) } }), {});
 
   useEffect(() => {
     compareAPI.getSettings().then(r => {
       setSettings(r.settings);
-      const d = {}, dt = {};
+      setExpandedId(r.settings[0]?.id || null);
+      const d = {}, dt = {}, db = {};
       r.settings.forEach(s => {
         d[s.id]  = { ...s.weights };
-        dt[s.id] = {
-          costPerResult: { ...DELTA_DEFAULTS.costPerResult, ...(s.deltaThresholds?.costPerResult || {}) },
-          results:       { ...DELTA_DEFAULTS.results,       ...(s.deltaThresholds?.results       || {}) },
-          ctr:           { ...DELTA_DEFAULTS.ctr,           ...(s.deltaThresholds?.ctr           || {}) },
-          cpm:           { ...DELTA_DEFAULTS.cpm,           ...(s.deltaThresholds?.cpm           || {}) },
-          frequency:     { ...DELTA_DEFAULTS.frequency,     ...(s.deltaThresholds?.frequency     || {}) },
-        };
+        dt[s.id] = mkDT(s.deltaThresholds);
+        db[s.id] = mkDB(s.baseThresholds);
       });
-      setDrafts(d);
-      setDraftThresholds(dt);
+      setDrafts(d); setDraftThresholds(dt); setDraftBase(db);
+      if (isAdmin) {
+        const gd = r.globalDefaults || {};
+        setGDraftW({ ...WEIGHT_DEFAULTS, ...(gd.weights || {}) });
+        setGDraftDT(mkDT(gd.deltaThresholds));
+        setGDraftB(mkDB(gd.baseThresholds));
+      }
     }).finally(() => setLoading(false));
   }, []);
 
-  const setW = (clientId, key, val) => {
-    const num = Math.max(0, Math.min(100, Number(val) || 0));
-    setDrafts(p => ({ ...p, [clientId]: { ...p[clientId], [key]: num } }));
+  const setW  = (id, k, v) => setDrafts(p => ({ ...p, [id]: { ...p[id], [k]: Math.max(0, Math.min(100, Number(v) || 0)) } }));
+  const setDT = (id, m, f, v) => setDraftThresholds(p => ({ ...p, [id]: { ...p[id], [m]: { ...(p[id]?.[m] || {}), [f]: Math.max(1, Math.min(100, Number(v) || 1)) } } }));
+  const setDB = (id, m, f, v) => setDraftBase(p => ({ ...p, [id]: { ...p[id], [m]: { ...(p[id]?.[m] || {}), [f]: f === 'enabled' ? v : Math.max(0, Number(v) || 0) } } }));
+
+  const setGW  = (k, v) => setGDraftW(p => ({ ...p, [k]: Math.max(0, Math.min(100, Number(v) || 0)) }));
+  const setGDT = (m, f, v) => setGDraftDT(p => ({ ...p, [m]: { ...(p?.[m] || {}), [f]: Math.max(1, Math.min(100, Number(v) || 1)) } }));
+  const setGB  = (m, f, v) => setGDraftB(p => ({ ...p, [m]: { ...(p?.[m] || {}), [f]: f === 'enabled' ? v : Math.max(0, Number(v) || 0) } }));
+
+  const total  = (id) => Object.values(drafts[id] || {}).reduce((s, v) => s + Number(v), 0);
+  const gTotal = ()   => Object.values(gDraftW || {}).reduce((s, v) => s + Number(v), 0);
+
+  const resetClient = (id) => {
+    setDrafts(p => ({ ...p, [id]: { ...WEIGHT_DEFAULTS } }));
+    setDraftThresholds(p => ({ ...p, [id]: mkDT(null) }));
+    setDraftBase(p => ({ ...p, [id]: mkDB(null) }));
   };
 
-  const setDT = (clientId, metric, field, val) => {
-    const num = Math.max(1, Math.min(100, Number(val) || 1));
-    setDraftThresholds(p => ({
-      ...p,
-      [clientId]: { ...p[clientId], [metric]: { ...(p[clientId]?.[metric] || {}), [field]: num } },
-    }));
-  };
-
-  const total = (clientId) => Object.values(drafts[clientId] || {}).reduce((s, v) => s + Number(v), 0);
-
-  const handleSave = (clientId) => {
-    const t = total(clientId);
-    if (Math.abs(t - 100) > 1) return toast(`Weight values must sum to 100 (currently ${t})`, 'error');
-    setConfirm(clientId);
+  const handleSave = (id) => {
+    const t = total(id);
+    if (Math.abs(t - 100) > 1) return toast(`Weights must sum to 100 (currently ${t})`, 'error');
+    setConfirm(id);
   };
 
   const confirmSave = async () => {
     setSaving(confirm);
     try {
-      await compareAPI.saveSettings(confirm, drafts[confirm], draftThresholds[confirm]);
+      await compareAPI.saveSettings(confirm, drafts[confirm], draftThresholds[confirm], draftBase[confirm]);
       toast('Health rules saved.', 'success');
-      setConfirm(null);
-      onSaved();
-    } catch (err) {
-      toast(err.response?.data?.error || 'Save failed', 'error');
-    } finally { setSaving(null); }
+      setConfirm(null); onSaved();
+    } catch (err) { toast(err.response?.data?.error || 'Save failed', 'error'); }
+    finally { setSaving(null); }
   };
+
+  const handleSaveGlobal = async () => {
+    const t = gTotal();
+    if (Math.abs(t - 100) > 1) return toast(`Global weights must sum to 100 (currently ${t})`, 'error');
+    setSavingGlobal(true);
+    try {
+      await compareAPI.saveDefaults(gDraftW, gDraftDT, gDraftB);
+      toast('Global defaults saved.', 'success'); onSaved();
+    } catch (err) { toast(err.response?.data?.error || 'Save failed', 'error'); }
+    finally { setSavingGlobal(false); }
+  };
+
+  const renderMetrics = (wt, setWt, dth, setDth, bth, setBth, disabled) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr 50px 76px 76px 110px', gap: '4px 8px', alignItems: 'center', marginBottom: 2 }}>
+        <div style={gs.colHeader}>Metric</div>
+        <div style={gs.colHeader}>Weight</div>
+        <div style={{ ...gs.colHeader, textAlign: 'center' }}>%</div>
+        <div style={{ ...gs.colHeader, textAlign: 'center', color: '#32cd32' }}>🟢 Good if</div>
+        <div style={{ ...gs.colHeader, textAlign: 'center', color: '#ff4d4d' }}>🔴 Bad if</div>
+        <div style={{ ...gs.colHeader, textAlign: 'center', color: '#a0a0ff' }}>🏠 Base</div>
+      </div>
+      {WEIGHT_KEYS.map(({ key, label, lowerIsBetter, unit }) => {
+        const w = wt?.[key] || 0;
+        const t = dth?.[key] || DELTA_DEFAULTS[key];
+        const b = bth?.[key] || BASE_DEFAULTS[key];
+        const unitLabel = unit === 'RM' ? 'RM' : unit === '%' ? '%' : '#';
+        return (
+          <div key={key} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 50px 76px 76px 110px', gap: '0 8px', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</div>
+              <div style={{ fontSize: 9, color: 'var(--text-dim)' }}>{lowerIsBetter ? 'Lower = better' : 'Higher = better'}</div>
+            </div>
+            <input type="range" min={0} max={100} step={5} value={w} onChange={e => setWt(key, e.target.value)} disabled={disabled} style={{ accentColor: '#32cd32', width: '100%' }} />
+            <input type="number" min={0} max={100} step={5} value={w} onChange={e => setWt(key, e.target.value)} disabled={disabled} className="form-input" style={{ width: '100%', textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, justifyContent: 'center' }}>
+              <input type="number" min={1} max={100} step={1} value={t.good} onChange={e => setDth(key, 'good', e.target.value)} disabled={disabled} className="form-input" style={{ width: 38, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }} />
+              <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>%</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, justifyContent: 'center' }}>
+              <input type="number" min={1} max={100} step={1} value={t.bad} onChange={e => setDth(key, 'bad', e.target.value)} disabled={disabled} className="form-input" style={{ width: 38, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#ff4d4d', padding: '3px 4px' }} />
+              <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>%</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
+              <label style={{ fontSize: 9, color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 2, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+                <input type="checkbox" checked={b.enabled} onChange={e => setBth(key, 'enabled', e.target.checked)} disabled={disabled} style={{ accentColor: '#a0a0ff', cursor: 'pointer' }} />
+              </label>
+              <input type="number" min={0} step={unit === '%' ? 0.1 : 0.5} value={b.value} onChange={e => setBth(key, 'value', e.target.value)} disabled={disabled || !b.enabled} className="form-input" style={{ width: 42, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#a0a0ff', padding: '3px 4px', opacity: b.enabled ? 1 : 0.4 }} />
+              <span style={{ fontSize: 9, color: 'var(--text-dim)' }}>{unitLabel}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 700, width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div className="modal-box glass" style={{ maxWidth: 820, width: '100%', margin: '0 auto', position: 'relative' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>⚖️ Health Rules</h2>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Set the importance weight of each metric (must total 100), and the % change thresholds for green/red signals.
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Weights (must total 100) · % change thresholds for 🟢/🔴 · Base value to soften signals when metric is still acceptable
             </p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -423,121 +525,91 @@ function WeightsModal({ onClose, onSaved }) {
         {loading ? (
           <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            {settings.map(s => {
-              const d  = drafts[s.id] || s.weights;
-              const dt = draftThresholds[s.id] || DELTA_DEFAULTS;
-              const t  = total(s.id);
-              const valid = Math.abs(t - 100) <= 1;
-              return (
-                <div key={s.id} style={{ borderRadius: 10, border: '1px solid rgba(50,205,50,0.12)', padding: '16px 18px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{s.name}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{s.clientCode}</span>
-                    </div>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: valid ? '#32cd32' : '#ff4d4d' }}>
-                      Total weight: {t}
-                    </span>
+          <>
+            {/* Admin: Global Defaults */}
+            {isAdmin && gDraftW && (
+              <div style={{ marginBottom: 14, border: '1px solid rgba(160,160,255,0.2)', borderRadius: 10, overflow: 'hidden' }}>
+                <button onClick={() => setShowGlobal(v => !v)} style={{ width: '100%', background: 'rgba(160,160,255,0.06)', border: 'none', padding: '11px 16px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 9, color: '#a0a0ff' }}>{showGlobal ? '▼' : '▶'}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#a0a0ff' }}>🌐 Global Defaults</span>
+                    <span style={{ fontSize: 10, color: 'var(--text-dim)', background: 'rgba(160,160,255,0.1)', borderRadius: 4, padding: '1px 6px' }}>Admin Only</span>
                   </div>
-
-                  {/* Column headers */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 58px 80px 80px', gap: '8px 10px', alignItems: 'center', marginBottom: 6 }}>
-                    <div style={gs.colHeader}>Metric</div>
-                    <div style={gs.colHeader}>Weight</div>
-                    <div style={{ ...gs.colHeader, textAlign: 'center' }}>%</div>
-                    <div style={{ ...gs.colHeader, textAlign: 'center', color: '#32cd32' }}>🟢 Green if</div>
-                    <div style={{ ...gs.colHeader, textAlign: 'center', color: '#ff4d4d' }}>🔴 Red if</div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {WEIGHT_KEYS.map(({ key, label, lowerIsBetter }) => {
-                      const thr = dt[key] || DELTA_DEFAULTS[key];
-                      const greenLabel = lowerIsBetter ? `drops >${thr.good}%` : `rises >${thr.good}%`;
-                      const redLabel   = lowerIsBetter ? `rises >${thr.bad}%`  : `drops >${thr.bad}%`;
-                      return (
-                        <div key={key} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 58px 80px 80px', gap: '0 10px', alignItems: 'center' }}>
-                          <div>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</div>
-                            <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{lowerIsBetter ? 'Lower = better' : 'Higher = better'}</div>
-                          </div>
-                          <input
-                            type="range" min={0} max={100} step={5}
-                            value={d[key] || 0}
-                            onChange={e => setW(s.id, key, e.target.value)}
-                            disabled={!isAdmin}
-                            style={{ accentColor: '#32cd32', width: '100%' }}
-                          />
-                          <input
-                            type="number" min={0} max={100} step={5}
-                            value={d[key] || 0}
-                            onChange={e => setW(s.id, key, e.target.value)}
-                            disabled={!isAdmin}
-                            className="form-input"
-                            style={{ width: '100%', textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }}
-                          />
-                          {/* Green threshold */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <input
-                              type="number" min={1} max={100} step={1}
-                              value={thr.good}
-                              onChange={e => setDT(s.id, key, 'good', e.target.value)}
-                              disabled={!isAdmin}
-                              className="form-input"
-                              style={{ width: 44, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }}
-                            />
-                            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>%</span>
-                          </div>
-                          {/* Red threshold */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                            <input
-                              type="number" min={1} max={100} step={1}
-                              value={thr.bad}
-                              onChange={e => setDT(s.id, key, 'bad', e.target.value)}
-                              disabled={!isAdmin}
-                              className="form-input"
-                              style={{ width: 44, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#ff4d4d', padding: '3px 4px' }}
-                            />
-                            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>%</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {isAdmin && (
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => handleSave(s.id)}
-                        disabled={!valid || saving === s.id}
-                      >
-                        {saving === s.id ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Saving…</> : 'Apply'}
+                  <span style={{ fontSize: 11, fontWeight: 700, color: Math.abs(gTotal() - 100) <= 1 ? '#a0a0ff' : '#ff4d4d' }}>Total: {gTotal()}</span>
+                </button>
+                {showGlobal && (
+                  <div style={{ padding: '14px 16px', borderTop: '1px solid rgba(160,160,255,0.1)' }}>
+                    <p style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 12 }}>
+                      Default rules for clients without custom settings.
+                    </p>
+                    {renderMetrics(gDraftW, setGW, gDraftDT, setGDT, gDraftB, setGB, false)}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => { setGDraftW({ ...WEIGHT_DEFAULTS }); setGDraftDT(mkDT(null)); setGDraftB(mkDB(null)); }}>↺ Reset</button>
+                      <button className="btn btn-primary btn-sm" onClick={handleSaveGlobal} disabled={Math.abs(gTotal() - 100) > 1 || savingGlobal}>
+                        {savingGlobal ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Saving…</> : 'Save Global Defaults'}
                       </button>
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Per-client accordion */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {settings.map(s => {
+                const isExpanded = expandedId === s.id;
+                const d  = drafts[s.id] || {};
+                const dt = draftThresholds[s.id] || {};
+                const db = draftBase[s.id] || {};
+                const t  = total(s.id);
+                const valid = Math.abs(t - 100) <= 1;
+                return (
+                  <div key={s.id} style={{ borderRadius: 10, border: `1px solid ${isExpanded ? 'rgba(50,205,50,0.25)' : 'rgba(50,205,50,0.1)'}`, overflow: 'hidden' }}>
+                    <button onClick={() => setExpandedId(isExpanded ? null : s.id)} style={{ width: '100%', background: isExpanded ? 'rgba(50,205,50,0.06)' : 'transparent', border: 'none', padding: '11px 16px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 9, color: '#32cd32' }}>{isExpanded ? '▼' : '▶'}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{s.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{s.clientCode}</span>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: valid ? '#32cd32' : '#ff4d4d' }}>Total: {t}</span>
+                    </button>
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18 }} style={{ overflow: 'hidden' }}>
+                          <div style={{ padding: '14px 16px', borderTop: '1px solid rgba(50,205,50,0.1)' }}>
+                            {renderMetrics(
+                              d, (k, v) => setW(s.id, k, v),
+                              dt, (m, f, v) => setDT(s.id, m, f, v),
+                              db, (m, f, v) => setDB(s.id, m, f, v),
+                              !isAdmin
+                            )}
+                            {isAdmin && (
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+                                <button className="btn btn-ghost btn-sm" onClick={() => resetClient(s.id)}>↺ Reset to Default</button>
+                                <button className="btn btn-primary btn-sm" onClick={() => handleSave(s.id)} disabled={!valid || saving === s.id}>
+                                  {saving === s.id ? <><div className="spinner" style={{ width: 12, height: 12 }} /> Saving…</> : 'Apply'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
 
         <AnimatePresence>
           {confirm && (
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}
-            >
-              <motion.div
-                initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-                className="glass" style={{ padding: '28px 32px', borderRadius: 14, textAlign: 'center', maxWidth: 340 }}
-              >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="glass" style={{ padding: '28px 32px', borderRadius: 14, textAlign: 'center', maxWidth: 340 }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>⚖️</div>
                 <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>Confirm Rule Change</h3>
                 <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
-                  This will update the health rules for <strong style={{ color: 'var(--text-primary)' }}>
-                    {settings.find(s => s.id === confirm)?.name}
-                  </strong>. New rules will apply on next data fetch.
+                  Update health rules for <strong style={{ color: 'var(--text-primary)' }}>{settings.find(s => s.id === confirm)?.name}</strong>. New rules apply on next data fetch.
                 </p>
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                   <button className="btn btn-ghost" onClick={() => setConfirm(null)}>Cancel</button>
@@ -573,7 +645,7 @@ function ColourGuide({ onClose }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 480, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 480, width: '100%', margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>🎨 Delta Colour Guide</h2>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -644,7 +716,7 @@ function BudgetEditModal({ row, clientId, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 380, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 380, width: '100%', margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)' }}>Edit Budget</h2>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -906,6 +978,17 @@ export default function CompareMonitor() {
     };
   }, [meta]);
 
+  const baseThresholds = useMemo(() => {
+    const saved = meta?.client?.compareBaseThresholds || {};
+    return {
+      costPerResult: { ...BASE_DEFAULTS.costPerResult, ...(saved.costPerResult || {}) },
+      results:       { ...BASE_DEFAULTS.results,       ...(saved.results       || {}) },
+      ctr:           { ...BASE_DEFAULTS.ctr,           ...(saved.ctr           || {}) },
+      cpm:           { ...BASE_DEFAULTS.cpm,           ...(saved.cpm           || {}) },
+      frequency:     { ...BASE_DEFAULTS.frequency,     ...(saved.frequency     || {}) },
+    };
+  }, [meta]);
+
   // ── Row renderer ───────────────────────────────────────────────────────────────
 
   const renderRow = (row) => {
@@ -959,11 +1042,11 @@ export default function CompareMonitor() {
         </td>
 
         <SpendCell curr={row.curr.spend} />
-        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} thresholds={deltaThresholds.results} />
-        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} thresholds={deltaThresholds.ctr} />
-        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.cpm} />
-        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} thresholds={deltaThresholds.frequency} />
-        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.costPerResult} />
+        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} thresholds={deltaThresholds.results}       base={baseThresholds.results} />
+        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} thresholds={deltaThresholds.ctr}           base={baseThresholds.ctr} />
+        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.cpm}           base={baseThresholds.cpm} />
+        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} thresholds={deltaThresholds.frequency}  base={baseThresholds.frequency} />
+        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.costPerResult}  base={baseThresholds.costPerResult} />
 
         <td style={tds.metricCell}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>

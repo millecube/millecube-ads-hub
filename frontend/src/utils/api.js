@@ -93,9 +93,11 @@ export const performanceAPI = {
 export const compareAPI = {
   fetch:          (params)            => api.get('/compare', { params }).then(r => r.data),
   getSettings:    ()                  => api.get('/compare/settings').then(r => r.data),
-  saveSettings:   (clientId, weights, deltaThresholds) => api.put(`/compare/settings/${clientId}`, { weights, deltaThresholds }).then(r => r.data),
+  saveSettings:   (clientId, weights, deltaThresholds, baseThresholds) => api.put(`/compare/settings/${clientId}`, { weights, deltaThresholds, baseThresholds }).then(r => r.data),
   updateBudget:   (data)              => api.patch('/compare/budget', data).then(r => r.data),
   adCreative:     (adId, clientId)   => api.get(`/compare/ad-creative/${adId}`, { params: { clientId } }).then(r => r.data),
+  getDefaults:    ()                  => api.get('/compare/defaults').then(r => r.data),
+  saveDefaults:   (weights, deltaThresholds, baseThresholds) => api.put('/compare/defaults', { weights, deltaThresholds, baseThresholds }).then(r => r.data),
 };
 
 export const prefsAPI = {

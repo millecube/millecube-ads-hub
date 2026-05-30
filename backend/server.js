@@ -1911,6 +1911,8 @@ function pctDelta(curr, prev) {
   return ((curr - prev) / Math.abs(prev)) * 100;
 }
 
+const WEIGHT_DEFAULTS = { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
+
 const DELTA_DEFAULTS = {
   costPerResult: { good: 5,  bad: 10 },
   results:       { good: 5,  bad: 15 },
@@ -1919,27 +1921,44 @@ const DELTA_DEFAULTS = {
   frequency:     { good: 5,  bad: 15 },
 };
 
-function computeCompareHealth(curr, prev, deltaThresholds, weights) {
-  const w = weights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
+const BASE_DEFAULTS = {
+  costPerResult: { value: 30,  enabled: true },
+  results:       { value: 10,  enabled: true },
+  ctr:           { value: 1.5, enabled: true },
+  cpm:           { value: 20,  enabled: true },
+  frequency:     { value: 2.5, enabled: true },
+};
+
+function computeCompareHealth(curr, prev, deltaThresholds, weights, baseThresholds) {
+  const w  = weights        || WEIGHT_DEFAULTS;
   const dt = deltaThresholds || DELTA_DEFAULTS;
+  const bt = baseThresholds  || BASE_DEFAULTS;
   const signals = [];
   let score = 0, totalWeight = 0;
 
-  const addSig = (metric, delta, lowerIsBetter) => {
+  const addSig = (metric, delta, currVal, lowerIsBetter) => {
     if (delta === null || delta === undefined) return;
-    const t = dt[metric] || DELTA_DEFAULTS[metric] || { good: 5, bad: 10 };
-    const wt = w[metric] || 0;
+    const t  = dt[metric] || DELTA_DEFAULTS[metric] || { good: 5, bad: 10 };
+    const b  = bt[metric] || BASE_DEFAULTS[metric];
+    const wt = w[metric]  || 0;
     let sig;
     if (lowerIsBetter) {
-      if (delta >= t.bad)       sig = 'red';
+      if (delta >= t.bad)        sig = 'red';
       else if (delta <= -t.good) sig = 'green';
       else if (Math.abs(delta) < 2) sig = 'grey';
       else sig = 'yellow';
     } else {
-      if (delta <= -t.bad)      sig = 'red';
-      else if (delta >= t.good) sig = 'green';
+      if (delta <= -t.bad)       sig = 'red';
+      else if (delta >= t.good)  sig = 'green';
       else if (Math.abs(delta) < 2) sig = 'grey';
       else sig = 'yellow';
+    }
+    if (b?.enabled && currVal != null) {
+      const withinBase = lowerIsBetter ? currVal <= b.value : currVal >= b.value;
+      if (withinBase) {
+        if (sig === 'red')    sig = 'yellow';
+        else if (sig === 'yellow') sig = 'grey';
+      }
     }
     signals.push({ metric, delta, sig });
     score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * wt;
@@ -1947,15 +1966,15 @@ function computeCompareHealth(curr, prev, deltaThresholds, weights) {
   };
 
   if (curr.costPerResult > 0 && prev?.costPerResult > 0)
-    addSig('costPerResult', pctDelta(curr.costPerResult, prev.costPerResult), true);
+    addSig('costPerResult', pctDelta(curr.costPerResult, prev.costPerResult), curr.costPerResult, true);
   if (prev?.results > 0)
-    addSig('results', pctDelta(curr.results || 0, prev.results), false);
+    addSig('results', pctDelta(curr.results || 0, prev.results), curr.results || 0, false);
   if (prev?.ctr > 0)
-    addSig('ctr', pctDelta(curr.ctr || 0, prev.ctr), false);
+    addSig('ctr', pctDelta(curr.ctr || 0, prev.ctr), curr.ctr || 0, false);
   if (prev?.cpm > 0)
-    addSig('cpm', pctDelta(curr.cpm || 0, prev.cpm), true);
+    addSig('cpm', pctDelta(curr.cpm || 0, prev.cpm), curr.cpm || 0, true);
   if (prev?.frequency > 0)
-    addSig('frequency', pctDelta(curr.frequency || 0, prev.frequency), true);
+    addSig('frequency', pctDelta(curr.frequency || 0, prev.frequency), curr.frequency || 0, true);
 
   const healthScore = totalWeight > 0 ? Math.round(score / totalWeight) : 50;
   const reds   = signals.filter(s => s.sig === 'red').length;
@@ -2106,7 +2125,8 @@ app.get('/api/compare', async (req, res) => {
         { ...curr, results, costPerResult },
         prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
         client.compareDeltaThresholds || null,
-        client.compareWeights || null
+        client.compareWeights || null,
+        client.compareBaseThresholds || null
       );
 
       return {
@@ -2121,7 +2141,7 @@ app.get('/api/compare', async (req, res) => {
     res.json({
       rows, level, dateStart, dateStop,
       prevDateStart: prev.dateStart, prevDateStop: prev.dateStop,
-      client: { id: client.id, clientCode: client.clientCode, name: client.name, compareWeights: client.compareWeights || null, compareDeltaThresholds: client.compareDeltaThresholds || null },
+      client: { id: client.id, clientCode: client.clientCode, name: client.name, compareWeights: client.compareWeights || null, compareDeltaThresholds: client.compareDeltaThresholds || null, compareBaseThresholds: client.compareBaseThresholds || null },
       cachedAt: currData.fetchedAt,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2135,22 +2155,30 @@ app.get('/api/compare/settings', async (req, res) => {
       : allClients.filter(c => Array.isArray(c.assignedUsers) && c.assignedUsers.includes(req.user.id));
     const settings = visible.map(c => ({
       id: c.id, name: c.name, clientCode: c.clientCode,
-      weights: c.compareWeights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 },
+      weights: c.compareWeights || WEIGHT_DEFAULTS,
       deltaThresholds: c.compareDeltaThresholds || DELTA_DEFAULTS,
+      baseThresholds: c.compareBaseThresholds || BASE_DEFAULTS,
     }));
-    res.json({ settings });
+    let globalDefaults = null;
+    if (req.user.role === 'admin' && usingMongo()) {
+      const db = await getDb();
+      const doc = await db.collection('settings').findOne({ _id: 'compareGlobalDefaults' });
+      if (doc) globalDefaults = { weights: doc.weights, deltaThresholds: doc.deltaThresholds, baseThresholds: doc.baseThresholds };
+    }
+    res.json({ settings, globalDefaults });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/compare/settings/:clientId', requireAdmin, async (req, res) => {
   try {
-    const { weights, deltaThresholds } = req.body;
+    const { weights, deltaThresholds, baseThresholds } = req.body;
     if (!weights) return res.status(400).json({ error: 'weights required' });
     const total = Object.values(weights).reduce((s, v) => s + Number(v), 0);
     if (Math.abs(total - 100) > 1) return res.status(400).json({ error: 'Weights must sum to 100' });
 
     const update = { compareWeights: weights };
     if (deltaThresholds) update.compareDeltaThresholds = deltaThresholds;
+    if (baseThresholds)  update.compareBaseThresholds  = baseThresholds;
 
     if (usingMongo()) {
       const db = await getDb();
@@ -2161,6 +2189,36 @@ app.put('/api/compare/settings/:clientId', requireAdmin, async (req, res) => {
       if (idx === -1) return res.status(404).json({ error: 'Client not found' });
       Object.assign(clients[idx], update);
       fileWrite(FILE.clients, clients);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/compare/defaults', requireAdmin, async (req, res) => {
+  try {
+    let defaults = { weights: WEIGHT_DEFAULTS, deltaThresholds: DELTA_DEFAULTS, baseThresholds: BASE_DEFAULTS };
+    if (usingMongo()) {
+      const db = await getDb();
+      const doc = await db.collection('settings').findOne({ _id: 'compareGlobalDefaults' });
+      if (doc) defaults = { weights: doc.weights || WEIGHT_DEFAULTS, deltaThresholds: doc.deltaThresholds || DELTA_DEFAULTS, baseThresholds: doc.baseThresholds || BASE_DEFAULTS };
+    }
+    res.json(defaults);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/compare/defaults', requireAdmin, async (req, res) => {
+  try {
+    const { weights, deltaThresholds, baseThresholds } = req.body;
+    if (!weights) return res.status(400).json({ error: 'weights required' });
+    const total = Object.values(weights).reduce((s, v) => s + Number(v), 0);
+    if (Math.abs(total - 100) > 1) return res.status(400).json({ error: 'Weights must sum to 100' });
+    if (usingMongo()) {
+      const db = await getDb();
+      await db.collection('settings').updateOne(
+        { _id: 'compareGlobalDefaults' },
+        { $set: { weights, deltaThresholds: deltaThresholds || DELTA_DEFAULTS, baseThresholds: baseThresholds || BASE_DEFAULTS } },
+        { upsert: true }
+      );
     }
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
