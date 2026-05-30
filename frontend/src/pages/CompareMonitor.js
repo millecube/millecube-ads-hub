@@ -1164,11 +1164,11 @@ export default function CompareMonitor() {
 
     return (
       <tr key={row.id} style={{ background: isSelected ? 'rgba(50,205,50,0.05)' : undefined }}>
-        <td style={{ padding: '10px 8px' }}>
+        <td style={{ padding: '10px 8px', position: 'sticky', left: 0, zIndex: 2, background: isSelected ? 'rgba(17,37,26,1)' : 'var(--bg)' }}>
           <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)}
             style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
         </td>
-        <td style={tds.nameCell}>
+        <td style={{ ...tds.nameCell, position: 'sticky', left: 36, zIndex: 2, background: isSelected ? 'rgba(17,37,26,1)' : 'var(--bg)', boxShadow: '2px 0 6px rgba(0,0,0,0.18)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
             <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.3, flex: 1, wordBreak: 'break-word' }}>
               {row.name}
@@ -1356,14 +1356,15 @@ export default function CompareMonitor() {
         ) : filteredRows.length === 0 ? (
           <div style={s.center}>No data matches your filters.</div>
         ) : (
+          <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <table className="data-table" style={{ minWidth: 600 }}>
             <thead>
               <tr>
-                <th style={{ width: 36, padding: '10px 8px' }}>
+                <th style={{ width: 36, padding: '10px 8px', position: 'sticky', left: 0, zIndex: 4, background: 'var(--card-bg)' }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleAll}
                     style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
                 </th>
-                <Th col="name" style={{ minWidth: 200 }}>Name</Th>
+                <Th col="name" style={{ minWidth: 200, position: 'sticky', left: 36, zIndex: 4, background: 'var(--card-bg)', boxShadow: '2px 0 6px rgba(0,0,0,0.18)' }}>Name</Th>
                 {colConfig.filter(c => c.on).map(renderColHeader)}
               </tr>
             </thead>
@@ -1417,6 +1418,7 @@ export default function CompareMonitor() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
