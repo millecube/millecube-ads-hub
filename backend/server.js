@@ -2195,6 +2195,70 @@ app.patch('/api/compare/budget', async (req, res) => {
   }
 });
 
+app.get('/api/compare/ad-creative/:adId', async (req, res) => {
+  try {
+    const { clientId } = req.query;
+    if (!clientId) return res.status(400).json({ error: 'clientId required' });
+
+    const allClients = await readClients();
+    const client = allClients.find(c => c.id === clientId);
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+    if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
+      return res.status(403).json({ error: 'Access denied' });
+
+    const r = await axios.get(`https://graph.facebook.com/v19.0/${req.params.adId}`, {
+      params: {
+        access_token: client.accessToken,
+        fields: 'creative{id,name,body,title,description,call_to_action_type,image_url,thumbnail_url,object_story_spec}',
+      },
+    });
+
+    const creative = r.data.creative || {};
+    const spec = creative.object_story_spec || {};
+
+    let mediaType = 'none', mediaUrl = null, thumbnailUrl = null;
+    let headline    = creative.title       || null;
+    let primaryText = creative.body        || null;
+    let description = creative.description || null;
+    let ctaButton   = creative.call_to_action_type || null;
+
+    if (spec.video_data) {
+      mediaType    = 'video';
+      thumbnailUrl = spec.video_data.thumbnail_url || null;
+      mediaUrl     = spec.video_data.video_id
+        ? `https://www.facebook.com/video/${spec.video_data.video_id}`
+        : null;
+      headline    = headline    || spec.video_data.title       || null;
+      primaryText = primaryText || spec.video_data.message     || null;
+      description = description || spec.video_data.description || null;
+      ctaButton   = ctaButton   || spec.video_data.call_to_action?.type || null;
+    } else if (spec.link_data) {
+      mediaType    = 'image';
+      mediaUrl     = spec.link_data.picture || creative.image_url || null;
+      thumbnailUrl = mediaUrl;
+      headline    = headline    || spec.link_data.name        || null;
+      primaryText = primaryText || spec.link_data.message     || null;
+      description = description || spec.link_data.description || null;
+      ctaButton   = ctaButton   || spec.link_data.call_to_action?.type || null;
+    } else if (spec.template_data) {
+      mediaType   = 'carousel';
+      headline    = headline    || spec.template_data.name    || null;
+      primaryText = primaryText || spec.template_data.message || null;
+      ctaButton   = ctaButton   || spec.template_data.call_to_action?.type || null;
+    } else if (creative.image_url) {
+      mediaType = 'image';
+      mediaUrl  = thumbnailUrl = creative.image_url;
+    } else if (creative.thumbnail_url) {
+      mediaType    = 'video';
+      thumbnailUrl = creative.thumbnail_url;
+    }
+
+    res.json({ adId: req.params.adId, creativeName: creative.name || null, headline, primaryText, description, ctaButton, mediaType, mediaUrl, thumbnailUrl });
+  } catch (err) {
+    res.status(err.response?.status || 500).json({ error: err.response?.data?.error?.message || err.message });
+  }
+});
+
 // ── Budget: Helpers ───────────────────────────────────────────────────────────
 
 function getCurrentMonthStr() {

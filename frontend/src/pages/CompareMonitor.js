@@ -147,6 +147,134 @@ function BudgetChip({ row, onEdit }) {
   );
 }
 
+// ── Ad Creative Modal ──────────────────────────────────────────────────────────
+
+const CTA_LABELS = {
+  LEARN_MORE: 'Learn More', SHOP_NOW: 'Shop Now', SIGN_UP: 'Sign Up',
+  CONTACT_US: 'Contact Us', MESSAGE_PAGE: 'Send Message', WHATSAPP_MESSAGE: 'WhatsApp',
+  SUBSCRIBE: 'Subscribe', DOWNLOAD: 'Download', GET_OFFER: 'Get Offer',
+  GET_QUOTE: 'Get Quote', BOOK_TRAVEL: 'Book Now', CALL_NOW: 'Call Now',
+  APPLY_NOW: 'Apply Now', WATCH_MORE: 'Watch More', LISTEN_NOW: 'Listen Now',
+  GET_DIRECTIONS: 'Get Directions', ORDER_NOW: 'Order Now', BUY_NOW: 'Buy Now',
+  OPEN_LINK: 'Open Link', LIKE_PAGE: 'Like Page',
+};
+
+function AdCreativeModal({ adId, adName, clientId, onClose }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    compareAPI.adCreative(adId, clientId)
+      .then(setData)
+      .catch(err => setError(err.response?.data?.error || err.message))
+      .finally(() => setLoading(false));
+  }, [adId, clientId]);
+
+  const ctaLabel = data?.ctaButton ? (CTA_LABELS[data.ctaButton] || data.ctaButton.replace(/_/g, ' ')) : null;
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box glass" style={{ maxWidth: 480, width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>🖼️ Ad Preview</h3>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, wordBreak: 'break-word' }}>{adName}</p>
+
+        {loading && <div style={{ padding: '32px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>}
+
+        {error && (
+          <div style={{ padding: '20px 0', textAlign: 'center', color: '#ff4d4d', fontSize: 13 }}>
+            ⚠ {error}
+          </div>
+        )}
+
+        {data && !loading && (
+          <div>
+            {/* Media */}
+            {data.mediaType === 'image' && data.mediaUrl && (
+              <div style={{ borderRadius: 8, overflow: 'hidden', marginBottom: 16, background: 'rgba(0,0,0,0.2)', maxHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img
+                  src={data.mediaUrl} alt="Ad creative"
+                  style={{ width: '100%', maxHeight: 280, objectFit: 'contain', display: 'block' }}
+                  onError={e => { e.target.style.display = 'none'; }}
+                />
+              </div>
+            )}
+
+            {data.mediaType === 'video' && data.thumbnailUrl && (
+              <div style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', marginBottom: 16, background: '#000', maxHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src={data.thumbnailUrl} alt="Video thumbnail"
+                  style={{ width: '100%', maxHeight: 280, objectFit: 'contain', opacity: 0.85, display: 'block' }}
+                  onError={e => { e.target.style.display = 'none'; }}
+                />
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <span style={{ fontSize: 18, marginLeft: 3 }}>▶</span>
+                  </div>
+                  {data.mediaUrl && (
+                    <a href={data.mediaUrl} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', background: 'rgba(0,0,0,0.5)', padding: '3px 10px', borderRadius: 12, textDecoration: 'none' }}
+                    >View on Facebook ↗</a>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {data.mediaType === 'carousel' && (
+              <div style={{ padding: '12px 14px', borderRadius: 8, background: 'rgba(50,205,50,0.06)', border: '1px solid rgba(50,205,50,0.1)', marginBottom: 16, fontSize: 12, color: 'var(--text-muted)' }}>
+                🎠 Carousel ad — individual cards not available via API
+              </div>
+            )}
+
+            {/* Text fields */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {data.primaryText && (
+                <div>
+                  <div style={creativeLabel}>Primary Text</div>
+                  <div style={creativeValue}>{data.primaryText}</div>
+                </div>
+              )}
+              {data.headline && (
+                <div>
+                  <div style={creativeLabel}>Headline</div>
+                  <div style={{ ...creativeValue, fontWeight: 700 }}>{data.headline}</div>
+                </div>
+              )}
+              {data.description && (
+                <div>
+                  <div style={creativeLabel}>Description</div>
+                  <div style={creativeValue}>{data.description}</div>
+                </div>
+              )}
+              {ctaLabel && (
+                <div>
+                  <div style={creativeLabel}>Button</div>
+                  <span style={{
+                    display: 'inline-block', fontSize: 12, fontWeight: 700,
+                    background: 'rgba(50,205,50,0.15)', color: '#32cd32',
+                    border: '1px solid rgba(50,205,50,0.3)',
+                    borderRadius: 6, padding: '4px 14px',
+                  }}>{ctaLabel}</span>
+                </div>
+              )}
+              {!data.primaryText && !data.headline && !data.description && !ctaLabel && (
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', textAlign: 'center', padding: '8px 0' }}>
+                  No text content available for this ad creative.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const creativeLabel = { fontSize: 10, fontWeight: 700, color: '#32cd32', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 };
+const creativeValue = { fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5, wordBreak: 'break-word' };
+
 // ── Info Modal ─────────────────────────────────────────────────────────────────
 
 function InfoKV({ label, value }) {
@@ -582,6 +710,7 @@ export default function CompareMonitor() {
   const [showGuide,    setShowGuide]    = useState(false);
   const [editBudget,   setEditBudget]   = useState(null);
   const [infoRow,      setInfoRow]      = useState(null);
+  const [creativeRow,  setCreativeRow]  = useState(null);
   const [bulkAction,   setBulkAction]   = useState(null);
   const [bulkBusy,     setBulkBusy]     = useState(false);
 
@@ -802,6 +931,13 @@ export default function CompareMonitor() {
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 12, padding: '0 2px', flexShrink: 0, lineHeight: 1.2 }}
                 title="View info"
               >ⓘ</button>
+            )}
+            {row.level === 'ad' && (
+              <button
+                onClick={() => setCreativeRow(row)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 12, padding: '0 2px', flexShrink: 0, lineHeight: 1.2 }}
+                title="Preview ad creative"
+              >👁</button>
             )}
           </div>
         </td>
@@ -1097,6 +1233,12 @@ export default function CompareMonitor() {
       )}
 
       {/* Modals */}
+      {creativeRow && (
+        <AdCreativeModal
+          adId={creativeRow.id} adName={creativeRow.name} clientId={clientId}
+          onClose={() => setCreativeRow(null)}
+        />
+      )}
       {infoRow     && <InfoModal row={infoRow} onClose={() => setInfoRow(null)} />}
       {showWeights && <WeightsModal onClose={() => setShowWeights(false)} onSaved={fetchData} />}
       {showGuide   && <ColourGuide onClose={() => setShowGuide(false)} />}
