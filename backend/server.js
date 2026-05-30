@@ -264,13 +264,17 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
 const telegramPending = {}; // chatId -> { suggestions: [], awaitingConfirm: null }
 
-async function sendTelegram(text) {
+function escapeHtml(t) {
+  return String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function sendTelegram(text, opts = {}) {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return;
   try {
     await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-      chat_id: chatId, text, parse_mode: 'HTML',
+      chat_id: chatId, text, parse_mode: 'HTML', ...opts,
     });
   } catch (err) {
     console.error('[TELEGRAM] Send failed:', err.response?.data || err.message);
@@ -433,20 +437,63 @@ async function buildDetailedReport() {
 // Telegram webhook — public (no auth needed)
 app.post('/telegram/webhook', async (req, res) => {
   res.sendStatus(200);
+
+  const tgToken      = process.env.TELEGRAM_BOT_TOKEN;
+  const allowedChatId = String(process.env.TELEGRAM_CHAT_ID || '');
+
+  // ── Handle inline button taps (callback_query) ──
+  const cbq = req.body?.callback_query;
+  if (cbq) {
+    const cbChatId = String(cbq.message?.chat?.id || '');
+    if (cbChatId !== allowedChatId) return;
+    // Always acknowledge the tap so spinner disappears
+    await axios.post(`https://api.telegram.org/bot${tgToken}/answerCallbackQuery`, {
+      callback_query_id: cbq.id,
+    }).catch(() => {});
+
+    const data = cbq.data || '';
+    if (data.startsWith('pause_yes:')) {
+      const [, adsetId, clientId] = data.split(':');
+      const session = telegramPending[cbChatId] || { suggestions: [] };
+      const action  = session.suggestions?.find(s => s.adsetId === adsetId);
+      const displayName    = action?.adsetName   || adsetId;
+      const displayClient  = action?.clientCode  || '';
+      const displayCampaign= action?.campaignName|| '';
+      await sendTelegram(`⏳ Pausing "<b>${escapeHtml(displayName)}</b>"…`);
+      try {
+        const allClients = await readClients();
+        const client = allClients.find(c => c.id === clientId);
+        if (!client) throw new Error('Client not found');
+        const body = new URLSearchParams({ access_token: client.accessToken, status: 'PAUSED' });
+        await axios.post(`https://graph.facebook.com/v22.0/${adsetId}`, body);
+        if (usingMongo()) {
+          const db = await getDb();
+          await db.collection('monitorCache').deleteMany({ clientId: client.id, rangeKey: { $regex: '^(compare_v2_|struct_v2_|perf_)' } });
+        }
+        await sendTelegram(`✅ Paused: <b>${escapeHtml(displayName)}</b>\nClient: ${escapeHtml(displayClient)} | Campaign: ${escapeHtml(displayCampaign)}`);
+      } catch (err) {
+        const metaErr = err.response?.data?.error;
+        await sendTelegram(`❌ Failed: ${escapeHtml(metaErr ? metaErr.message : err.message)}`);
+      }
+    } else if (data === 'pause_no') {
+      await sendTelegram('↩️ Cancelled. No changes made.');
+    }
+    return;
+  }
+
+  // ── Handle regular text messages ──
   const msg = req.body?.message;
   if (!msg) return;
-  const chatId        = String(msg.chat?.id || '');
-  const allowedChatId = String(process.env.TELEGRAM_CHAT_ID || '');
+  const chatId = String(msg.chat?.id || '');
   if (chatId !== allowedChatId) return;
 
   const text = (msg.text || '').trim();
-  // Map keyboard button labels to commands
   const buttonMap = {
-    '📊 today summary':             '/summary',
-    '📅 yesterday':                 '/yesterday',
-    '📆 last 7 days':               '/7d',
-    '📋 full report (7-day + health)': '/report',
-    '❓ help':                      '/help',
+    '📊 today summary':                  '/summary',
+    '📅 yesterday':                      '/yesterday',
+    '📆 last 7 days':                    '/7d',
+    '📋 full report (7-day + health)':   '/report',
+    '❓ help':                           '/help',
   };
   const cmd = buttonMap[text.toLowerCase()] || text.toLowerCase();
 
@@ -454,78 +501,52 @@ app.post('/telegram/webhook', async (req, res) => {
   const session = telegramPending[chatId];
 
   try {
-    // ── Awaiting yes/no confirmation ──
-    if (session.awaitingConfirm) {
-      const action = session.awaitingConfirm;
-      if (cmd === '/yes' || cmd === 'yes') {
-        session.awaitingConfirm = null;
-        await sendTelegram(`⏳ Pausing "${action.adsetName}"…`);
-        try {
-          const allClients = await readClients();
-          const client = allClients.find(c => c.id === action.clientId);
-          if (!client) throw new Error('Client not found');
-          const body = new URLSearchParams({ access_token: client.accessToken, status: 'PAUSED' });
-          await axios.post(`https://graph.facebook.com/v22.0/${action.adsetId}`, body);
-          if (usingMongo()) {
-            const db = await getDb();
-            await db.collection('monitorCache').deleteMany({ clientId: client.id, rangeKey: { $regex: '^(compare_v2_|struct_v2_|perf_)' } });
-          }
-          await sendTelegram(`✅ Paused: <b>${action.adsetName}</b>\nClient: ${action.clientCode} | Campaign: ${action.campaignName}`);
-        } catch (err) {
-          const metaErr = err.response?.data?.error;
-          await sendTelegram(`❌ Failed: ${metaErr ? metaErr.message : err.message}`);
-        }
-      } else if (cmd === '/no' || cmd === 'no') {
-        session.awaitingConfirm = null;
-        await sendTelegram(`↩️ Cancelled. No changes made.`);
-      } else {
-        await sendTelegram(`Reply /yes to confirm or /no to cancel.`);
-      }
-      return;
-    }
-
     // ── /report ──
     if (cmd.startsWith('/report')) {
       await sendTelegram('⏳ Fetching 7-day report with health scores… this may take 20–30 seconds.');
-      const { clientMessages, allSuggestions, currStart, currEnd } = await buildDetailedReport();
+      const { clientMessages, allSuggestions } = await buildDetailedReport();
       session.suggestions = allSuggestions;
 
-      for (const msg of clientMessages) await sendTelegram(msg);
+      for (const m of clientMessages) await sendTelegram(m);
 
       if (allSuggestions.length === 0) {
         await sendTelegram('✅ No issues found. All ad sets are healthy!');
       } else {
         const lines = [`⚡ <b>${allSuggestions.length} Suggestion(s)</b>`, ''];
         for (const s of allSuggestions) {
-          lines.push(`[${s.num}] ${badgeIcon(s.badge)} <b>${s.badge}</b> "${s.adsetName}" (${s.clientCode})`);
+          lines.push(`[${s.num}] ${badgeIcon(s.badge)} <b>${escapeHtml(s.badge)}</b> "${escapeHtml(s.adsetName)}" (${escapeHtml(s.clientCode)})`);
           lines.push(`     Score: ${s.healthScore} | CPM: RM${s.cpm.toFixed(0)} | Freq: ${s.frequency.toFixed(1)} | CTR: ${s.ctr.toFixed(1)}%`);
-          lines.push(`     Campaign: ${s.campaignName}`);
+          lines.push(`     Campaign: ${escapeHtml(s.campaignName)}`);
           lines.push('');
         }
-        lines.push(`Type /pause [number] to act on a suggestion.`);
-        lines.push(`Example: /pause 1`);
+        lines.push(`Tap <b>/pause [number]</b> to act on a suggestion. Example: /pause 1`);
         await sendTelegram(lines.join('\n'));
       }
 
     // ── /pause N ──
     } else if (cmd.startsWith('/pause ')) {
-      const num = parseInt(cmd.replace('/pause ', '').trim());
+      const num    = parseInt(cmd.replace('/pause ', '').trim());
       const action = session.suggestions.find(s => s.num === num);
       if (!action) {
-        await sendTelegram(`❓ No suggestion #${num} found. Run /report first to load suggestions.`);
+        await sendTelegram(`❓ No suggestion #${num} found. Run /report first.`);
       } else {
-        session.awaitingConfirm = action;
         await sendTelegram([
           `⚠️ <b>Confirm: Pause this ad set?</b>`,
           ``,
-          `Ad Set: ${action.adsetName}`,
-          `Client: ${action.clientCode}`,
-          `Campaign: ${action.campaignName}`,
+          `Ad Set: ${escapeHtml(action.adsetName)}`,
+          `Client: ${escapeHtml(action.clientCode)}`,
+          `Campaign: ${escapeHtml(action.campaignName)}`,
           `Score: ${action.healthScore} | CPM: RM${action.cpm.toFixed(0)} | Freq: ${action.frequency.toFixed(1)}`,
           ``,
-          `Reply /yes to confirm or /no to cancel.`,
-          `⚠️ This will pause the ad set immediately.`,
-        ].join('\n'));
+          `Tap a button below — this will pause the ad set immediately.`,
+        ].join('\n'), {
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '✅ Yes, Pause', callback_data: `pause_yes:${action.adsetId}:${action.clientId}` },
+              { text: '❌ Cancel',     callback_data: 'pause_no' },
+            ]],
+          },
+        });
       }
 
     // ── /summary ──
@@ -534,10 +555,8 @@ app.post('/telegram/webhook', async (req, res) => {
 
     // ── /start — welcome + persistent keyboard ──
     } else if (cmd === '/start') {
-      const token  = process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = process.env.TELEGRAM_CHAT_ID;
-      await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
-        chat_id: chatId,
+      await axios.post(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+        chat_id: allowedChatId,
         text: '👋 <b>Millecube Ads Bot</b>\n\nTap a button below or use the menu (/) to get started.',
         parse_mode: 'HTML',
         reply_markup: {
@@ -568,8 +587,8 @@ app.post('/telegram/webhook', async (req, res) => {
         '/summary — Today\'s spend for all clients',
         '/yesterday — Yesterday\'s summary',
         '/7d — Last 7 days summary',
-        '/report — Full 7-day report with health scores + suggestions',
-        '/pause [N] — Pause suggested ad set (requires /yes confirmation)',
+        '/report — 7-day report with health scores + suggestions',
+        '/pause [N] — Pause a suggested ad set (tap Yes/Cancel button to confirm)',
         '/help — Show this message',
       ].join('\n'));
     }
