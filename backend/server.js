@@ -295,7 +295,7 @@ async function buildTelegramSummary(rangeLabel = 'today') {
 
   for (const client of allClients) {
     try {
-      const rows = await fetchMetaInsights(client, dateStart, dateStop);
+      const rows = await fetchPerfCampaignLevel(client, dateStart, dateStop);
       let spend = 0, impressions = 0, convos = 0;
       for (const r of rows) {
         spend       += parseFloat(r.spend || 0);
@@ -306,8 +306,8 @@ async function buildTelegramSummary(rangeLabel = 'today') {
       const cpm  = impressions > 0 ? spend / impressions * 1000 : 0;
       const icon = spend === 0 ? '⚫' : cpm < 8 ? '✅' : cpm < 15 ? '⚠️' : '🔴';
       lines.push(`${icon} <b>${client.clientCode}</b> — Spend: RM ${spend.toFixed(0)} | CPM: RM ${cpm.toFixed(2)} | Convos: ${convos}`);
-    } catch {
-      lines.push(`❓ <b>${client.clientCode}</b> — No data`);
+    } catch (err) {
+      lines.push(`❓ <b>${client.clientCode}</b> — No data (${err.response?.data?.error?.message || err.message})`);
     }
   }
 
