@@ -1896,7 +1896,11 @@ app.post('/api/performance/toggle', async (req, res) => {
     });
     if (usingMongo()) {
       const db = await getDb();
-      await db.collection('monitorCache').deleteMany({ clientId: client.id, key: /^perf_/ });
+      // Clear struct cache (holds effective_status) and compare perf cache for this client
+      await db.collection('monitorCache').deleteMany({
+        clientId: client.id,
+        rangeKey: { $regex: '^(compare_v2_|struct_v2_)' }
+      });
     }
     res.json({ ok: true });
   } catch (err) {
@@ -2266,7 +2270,11 @@ app.patch('/api/compare/budget', async (req, res) => {
 
     if (usingMongo()) {
       const db = await getDb();
-      await db.collection('monitorCache').deleteMany({ clientId: client.id, rangeKey: /^compare_v2_/ });
+      // Clear struct cache (holds daily/lifetime_budget) and compare perf cache
+      await db.collection('monitorCache').deleteMany({
+        clientId: client.id,
+        rangeKey: { $regex: '^(compare_v2_|struct_v2_)' }
+      });
     }
     res.json({ ok: true });
   } catch (err) {
