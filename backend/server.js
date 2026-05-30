@@ -416,7 +416,7 @@ const axios = require('axios');
 
 async function fetchMetaInsights(client, dateStart, dateStop) {
   const { accessToken, adAccountId } = client;
-  const baseUrl = `https://graph.facebook.com/v19.0/${adAccountId}/insights`;
+  const baseUrl = `https://graph.facebook.com/v22.0/${adAccountId}/insights`;
 
   const commonParams = {
     access_token: accessToken,
@@ -919,7 +919,7 @@ app.post('/api/clients/:id/verify', async (req, res) => {
     const db = await getDb();
     const client = await db.collection('clients').findOne({ id: req.params.id });
     if (!client) return res.status(404).json({ error: 'Client not found' });
-    const response = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}`, {
+    const response = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}`, {
       params: { access_token: client.accessToken, fields: 'name,account_status,currency' }
     });
     res.json({ ok: true, account: response.data });
@@ -1169,7 +1169,7 @@ function detectVKBranch(campaignName) {
 // ── Monitor: Meta API fetchers ────────────────────────────────────────────────
 
 async function fetchCampaignLevel(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1189,7 +1189,7 @@ async function fetchCampaignLevel(client, dateStart, dateStop) {
 
 async function fetchActiveCampaignsCount(client) {
   try {
-    const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/campaigns`, {
+    const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/campaigns`, {
       params: {
         access_token: client.accessToken,
         effective_status: JSON.stringify(['ACTIVE']),
@@ -1208,7 +1208,7 @@ async function fetchAudienceBreakdowns(client, dateStart, dateStop) {
     level: 'account', limit: 500,
     fields: 'impressions,clicks,spend,reach,ctr,cpm,cpc,actions'
   };
-  const url = `https://graph.facebook.com/v19.0/${client.adAccountId}/insights`;
+  const url = `https://graph.facebook.com/v22.0/${client.adAccountId}/insights`;
   const [gender, age, region, platform, device] = await Promise.all([
     axios.get(url, { params: { ...base, breakdowns: 'gender'             } }).then(r => r.data.data || []).catch(() => []),
     axios.get(url, { params: { ...base, breakdowns: 'age'                } }).then(r => r.data.data || []).catch(() => []),
@@ -1220,7 +1220,7 @@ async function fetchAudienceBreakdowns(client, dateStart, dateStop) {
 }
 
 async function fetchAdsetLevel(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1236,7 +1236,7 @@ async function fetchAdsetLevel(client, dateStart, dateStop) {
 }
 
 async function fetchAdLevel(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1281,7 +1281,7 @@ function extractPerfMetrics(row) {
 }
 
 async function fetchPerfCampaignLevel(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1293,7 +1293,7 @@ async function fetchPerfCampaignLevel(client, dateStart, dateStop) {
 }
 
 async function fetchPerfAdsetLevel(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1305,7 +1305,7 @@ async function fetchPerfAdsetLevel(client, dateStart, dateStop) {
 }
 
 async function fetchPerfAdLevel2(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1317,21 +1317,21 @@ async function fetchPerfAdLevel2(client, dateStart, dateStop) {
 }
 
 async function fetchCampaignStructure(client) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/campaigns`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/campaigns`, {
     params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,objective', limit: 500 }
   });
   return res.data.data || [];
 }
 
 async function fetchAdsetStructure(client) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/adsets`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/adsets`, {
     params: { access_token: client.accessToken, fields: 'id,name,effective_status,daily_budget,lifetime_budget,campaign_id,optimization_goal,billing_event,targeting', limit: 500 }
   });
   return res.data.data || [];
 }
 
 async function fetchAdStructure(client) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/ads`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/ads`, {
     params: { access_token: client.accessToken, fields: 'id,name,effective_status,adset_id', limit: 500 }
   });
   return res.data.data || [];
@@ -1396,7 +1396,7 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
 }
 
 async function fetchDailyTrend(client, dateStart, dateStop) {
-  const res = await axios.get(`https://graph.facebook.com/v19.0/${client.adAccountId}/insights`, {
+  const res = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}/insights`, {
     params: {
       access_token: client.accessToken,
       time_range: JSON.stringify({ since: dateStart, until: dateStop }),
@@ -1891,7 +1891,7 @@ app.post('/api/performance/toggle', async (req, res) => {
     if (!client) return res.status(404).json({ error: 'Client not found' });
     if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
       return res.status(403).json({ error: 'Access denied' });
-    await axios.post(`https://graph.facebook.com/v19.0/${objectId}`, null, {
+    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, null, {
       params: { access_token: client.accessToken, status }
     });
     if (usingMongo()) {
@@ -1904,7 +1904,8 @@ app.post('/api/performance/toggle', async (req, res) => {
     }
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+    const metaErr = err.response?.data?.error;
+    res.status(500).json({ error: metaErr ? `${metaErr.message} (code ${metaErr.code}${metaErr.error_subcode ? '/' + metaErr.error_subcode : ''})` : err.message });
   }
 });
 
@@ -2266,7 +2267,7 @@ app.patch('/api/compare/budget', async (req, res) => {
     if (budgetType === 'daily')    params.daily_budget    = amountCents;
     else                           params.lifetime_budget = amountCents;
 
-    await axios.post(`https://graph.facebook.com/v19.0/${objectId}`, null, { params });
+    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, null, { params });
 
     if (usingMongo()) {
       const db = await getDb();
@@ -2278,7 +2279,8 @@ app.patch('/api/compare/budget', async (req, res) => {
     }
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+    const metaErr = err.response?.data?.error;
+    res.status(500).json({ error: metaErr ? `${metaErr.message} (code ${metaErr.code}${metaErr.error_subcode ? '/' + metaErr.error_subcode : ''})` : err.message });
   }
 });
 
@@ -2293,7 +2295,7 @@ app.get('/api/compare/ad-creative/:adId', async (req, res) => {
     if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
       return res.status(403).json({ error: 'Access denied' });
 
-    const r = await axios.get(`https://graph.facebook.com/v19.0/${req.params.adId}`, {
+    const r = await axios.get(`https://graph.facebook.com/v22.0/${req.params.adId}`, {
       params: {
         access_token: client.accessToken,
         fields: 'creative{id,name,body,title,call_to_action_type,image_url,thumbnail_url,object_story_spec}',
