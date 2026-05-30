@@ -440,7 +440,15 @@ app.post('/telegram/webhook', async (req, res) => {
   if (chatId !== allowedChatId) return;
 
   const text = (msg.text || '').trim();
-  const cmd  = text.toLowerCase();
+  // Map keyboard button labels to commands
+  const buttonMap = {
+    '📊 today summary':             '/summary',
+    '📅 yesterday':                 '/yesterday',
+    '📆 last 7 days':               '/7d',
+    '📋 full report (7-day + health)': '/report',
+    '❓ help':                      '/help',
+  };
+  const cmd = buttonMap[text.toLowerCase()] || text.toLowerCase();
 
   if (!telegramPending[chatId]) telegramPending[chatId] = { suggestions: [], awaitingConfirm: null };
   const session = telegramPending[chatId];
@@ -521,7 +529,27 @@ app.post('/telegram/webhook', async (req, res) => {
       }
 
     // ── /summary ──
-    } else if (cmd.startsWith('/summary') || cmd === '/start') {
+    } else if (cmd.startsWith('/summary')) {
+      await sendTelegram(await buildTelegramSummary('today'));
+
+    // ── /start — welcome + persistent keyboard ──
+    } else if (cmd === '/start') {
+      const token  = process.env.TELEGRAM_BOT_TOKEN;
+      const chatId = process.env.TELEGRAM_CHAT_ID;
+      await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+        chat_id: chatId,
+        text: '👋 <b>Millecube Ads Bot</b>\n\nTap a button below or use the menu (/) to get started.',
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [{ text: '📊 Today Summary' }, { text: '📅 Yesterday' }, { text: '📆 Last 7 Days' }],
+            [{ text: '📋 Full Report (7-day + Health)' }],
+            [{ text: '❓ Help' }],
+          ],
+          resize_keyboard: true,
+          persistent: true,
+        },
+      });
       await sendTelegram(await buildTelegramSummary('today'));
 
     // ── /yesterday ──
@@ -555,12 +583,21 @@ app.post('/telegram/webhook', async (req, res) => {
 async function registerTelegramWebhook() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  const url = `https://millecube-ads-hub.onrender.com/telegram/webhook`;
+  const base = `https://api.telegram.org/bot${token}`;
   try {
-    await axios.post(`https://api.telegram.org/bot${token}/setWebhook`, { url });
-    console.log('[TELEGRAM] Webhook registered:', url);
+    await axios.post(`${base}/setWebhook`, { url: 'https://millecube-ads-hub.onrender.com/telegram/webhook' });
+    await axios.post(`${base}/setMyCommands`, {
+      commands: [
+        { command: 'summary',   description: '📊 Today\'s spend for all clients' },
+        { command: 'yesterday', description: '📅 Yesterday\'s summary' },
+        { command: 'report',    description: '📋 7-day report with health scores & suggestions' },
+        { command: '7d',        description: '📆 Last 7 days summary' },
+        { command: 'help',      description: '❓ Show all commands' },
+      ],
+    });
+    console.log('[TELEGRAM] Webhook + commands registered');
   } catch (err) {
-    console.error('[TELEGRAM] Webhook registration failed:', err.message);
+    console.error('[TELEGRAM] Setup failed:', err.message);
   }
 }
 
