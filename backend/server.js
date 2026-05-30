@@ -1911,66 +1911,62 @@ function pctDelta(curr, prev) {
   return ((curr - prev) / Math.abs(prev)) * 100;
 }
 
-function computeCompareHealth(curr, prev, thresholds, weights) {
+const DELTA_DEFAULTS = {
+  costPerResult: { good: 5,  bad: 10 },
+  results:       { good: 5,  bad: 15 },
+  ctr:           { good: 2,  bad: 10 },
+  cpm:           { good: 5,  bad: 10 },
+  frequency:     { good: 5,  bad: 15 },
+};
+
+function computeCompareHealth(curr, prev, deltaThresholds, weights) {
   const w = weights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 };
-  const t = thresholds || BENCH_DEFAULTS;
+  const dt = deltaThresholds || DELTA_DEFAULTS;
   const signals = [];
   let score = 0, totalWeight = 0;
 
-  if (curr.costPerResult > 0 && prev && prev.costPerResult > 0) {
-    const delta = pctDelta(curr.costPerResult, prev.costPerResult);
-    const bad = curr.costPerResult > t.cpr;
-    const sig = bad && delta > 10 ? 'red' : bad ? 'yellow' : delta <= -5 ? 'green' : delta < 5 ? 'grey' : 'yellow';
-    signals.push({ metric: 'costPerResult', delta, sig });
-    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.costPerResult;
-    totalWeight += w.costPerResult;
-  }
+  const addSig = (metric, delta, lowerIsBetter) => {
+    if (delta === null || delta === undefined) return;
+    const t = dt[metric] || DELTA_DEFAULTS[metric] || { good: 5, bad: 10 };
+    const wt = w[metric] || 0;
+    let sig;
+    if (lowerIsBetter) {
+      if (delta >= t.bad)       sig = 'red';
+      else if (delta <= -t.good) sig = 'green';
+      else if (Math.abs(delta) < 2) sig = 'grey';
+      else sig = 'yellow';
+    } else {
+      if (delta <= -t.bad)      sig = 'red';
+      else if (delta >= t.good) sig = 'green';
+      else if (Math.abs(delta) < 2) sig = 'grey';
+      else sig = 'yellow';
+    }
+    signals.push({ metric, delta, sig });
+    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * wt;
+    totalWeight += wt;
+  };
 
-  if (prev && prev.results > 0) {
-    const delta = pctDelta(curr.results || 0, prev.results);
-    const sig = delta >= 5 ? 'green' : delta >= -5 ? 'grey' : delta >= -15 ? 'yellow' : 'red';
-    signals.push({ metric: 'results', delta, sig });
-    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.results;
-    totalWeight += w.results;
-  }
-
-  if (prev && prev.ctr > 0) {
-    const delta = pctDelta(curr.ctr || 0, prev.ctr);
-    const bad = curr.ctr < t.ctr;
-    const sig = bad && delta < -10 ? 'red' : bad ? 'yellow' : delta >= 0 ? 'green' : delta >= -5 ? 'grey' : 'yellow';
-    signals.push({ metric: 'ctr', delta, sig });
-    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.ctr;
-    totalWeight += w.ctr;
-  }
-
-  if (prev && prev.cpm > 0) {
-    const delta = pctDelta(curr.cpm || 0, prev.cpm);
-    const bad = curr.cpm > t.cpm;
-    const sig = !bad && delta <= 0 ? 'green' : bad && delta > 10 ? 'red' : 'yellow';
-    signals.push({ metric: 'cpm', delta, sig });
-    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.cpm;
-    totalWeight += w.cpm;
-  }
-
-  if (prev && prev.frequency > 0) {
-    const delta = pctDelta(curr.frequency || 0, prev.frequency);
-    const bad = curr.frequency > t.frequency;
-    const sig = bad ? 'red' : delta > 15 ? 'yellow' : 'green';
-    signals.push({ metric: 'frequency', delta, sig });
-    score += (sig === 'green' ? 100 : sig === 'yellow' ? 60 : sig === 'grey' ? 70 : 20) * w.frequency;
-    totalWeight += w.frequency;
-  }
+  if (curr.costPerResult > 0 && prev?.costPerResult > 0)
+    addSig('costPerResult', pctDelta(curr.costPerResult, prev.costPerResult), true);
+  if (prev?.results > 0)
+    addSig('results', pctDelta(curr.results || 0, prev.results), false);
+  if (prev?.ctr > 0)
+    addSig('ctr', pctDelta(curr.ctr || 0, prev.ctr), false);
+  if (prev?.cpm > 0)
+    addSig('cpm', pctDelta(curr.cpm || 0, prev.cpm), true);
+  if (prev?.frequency > 0)
+    addSig('frequency', pctDelta(curr.frequency || 0, prev.frequency), true);
 
   const healthScore = totalWeight > 0 ? Math.round(score / totalWeight) : 50;
-  const reds = signals.filter(s => s.sig === 'red').length;
+  const reds   = signals.filter(s => s.sig === 'red').length;
   const greens = signals.filter(s => s.sig === 'green').length;
   const freqRed = signals.find(s => s.metric === 'frequency' && s.sig === 'red');
 
   let badge = 'KEEP';
-  if (reds >= 2 || healthScore < 35)       badge = 'PAUSE';
-  else if (reds === 1 && freqRed)          badge = 'REFRESH';
-  else if (reds === 1 || healthScore < 55) badge = 'WATCH';
-  else if (greens >= 3 && healthScore >= 75) badge = 'SCALE';
+  if (reds >= 2 || healthScore < 35)          badge = 'PAUSE';
+  else if (reds === 1 && freqRed)             badge = 'REFRESH';
+  else if (reds === 1 || healthScore < 55)    badge = 'WATCH';
+  else if (greens >= 3 && healthScore >= 75)  badge = 'SCALE';
 
   return { healthScore, signals, badge };
 }
@@ -2109,7 +2105,7 @@ app.get('/api/compare', async (req, res) => {
       const { healthScore, signals, badge } = computeCompareHealth(
         { ...curr, results, costPerResult },
         prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
-        client.thresholds || null,
+        client.compareDeltaThresholds || null,
         client.compareWeights || null
       );
 
@@ -2125,7 +2121,7 @@ app.get('/api/compare', async (req, res) => {
     res.json({
       rows, level, dateStart, dateStop,
       prevDateStart: prev.dateStart, prevDateStop: prev.dateStop,
-      client: { id: client.id, clientCode: client.clientCode, name: client.name, compareWeights: client.compareWeights || null },
+      client: { id: client.id, clientCode: client.clientCode, name: client.name, compareWeights: client.compareWeights || null, compareDeltaThresholds: client.compareDeltaThresholds || null },
       cachedAt: currData.fetchedAt,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2140,7 +2136,7 @@ app.get('/api/compare/settings', async (req, res) => {
     const settings = visible.map(c => ({
       id: c.id, name: c.name, clientCode: c.clientCode,
       weights: c.compareWeights || { costPerResult: 35, results: 25, ctr: 20, cpm: 10, frequency: 10 },
-      thresholds: c.thresholds || BENCH_DEFAULTS,
+      deltaThresholds: c.compareDeltaThresholds || DELTA_DEFAULTS,
     }));
     res.json({ settings });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2148,19 +2144,22 @@ app.get('/api/compare/settings', async (req, res) => {
 
 app.put('/api/compare/settings/:clientId', requireAdmin, async (req, res) => {
   try {
-    const { weights } = req.body;
+    const { weights, deltaThresholds } = req.body;
     if (!weights) return res.status(400).json({ error: 'weights required' });
     const total = Object.values(weights).reduce((s, v) => s + Number(v), 0);
     if (Math.abs(total - 100) > 1) return res.status(400).json({ error: 'Weights must sum to 100' });
 
+    const update = { compareWeights: weights };
+    if (deltaThresholds) update.compareDeltaThresholds = deltaThresholds;
+
     if (usingMongo()) {
       const db = await getDb();
-      await db.collection('clients').updateOne({ id: req.params.clientId }, { $set: { compareWeights: weights } });
+      await db.collection('clients').updateOne({ id: req.params.clientId }, { $set: update });
     } else {
       const clients = fileRead(FILE.clients);
       const idx = clients.findIndex(c => c.id === req.params.clientId);
       if (idx === -1) return res.status(404).json({ error: 'Client not found' });
-      clients[idx].compareWeights = weights;
+      Object.assign(clients[idx], update);
       fileWrite(FILE.clients, clients);
     }
     res.json({ ok: true });

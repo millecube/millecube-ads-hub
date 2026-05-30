@@ -33,14 +33,28 @@ const BADGE_META = {
   REFRESH: { color: '#ff8c00',  bg: 'rgba(255,140,0,0.15)',   label: 'REFRESH' },
 };
 
-function getDeltaColor(delta, lowerIsBetter) {
+const DELTA_DEFAULTS = {
+  costPerResult: { good: 5,  bad: 10 },
+  results:       { good: 5,  bad: 15 },
+  ctr:           { good: 2,  bad: 10 },
+  cpm:           { good: 5,  bad: 10 },
+  frequency:     { good: 5,  bad: 15 },
+};
+
+function getDeltaColor(delta, lowerIsBetter, thresholds) {
   if (delta === null || delta === undefined) return { color: 'var(--text-dim)', arrow: '—' };
-  const isGood = lowerIsBetter ? delta < 0 : delta > 0;
-  const magnitude = Math.abs(delta);
-  if (isGood && magnitude > 2)   return { color: '#32cd32', arrow: lowerIsBetter ? '↓' : '↑' };
-  if (!isGood && magnitude > 10) return { color: '#ff4d4d', arrow: lowerIsBetter ? '↑' : '↓' };
-  if (magnitude <= 2)            return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
-  return { color: '#f0a500', arrow: !isGood ? (lowerIsBetter ? '↑' : '↓') : (lowerIsBetter ? '↓' : '↑') };
+  const t = thresholds || { good: 2, bad: 10 };
+  if (lowerIsBetter) {
+    if (delta >= t.bad)        return { color: '#ff4d4d', arrow: '↑' };
+    if (delta <= -t.good)      return { color: '#32cd32', arrow: '↓' };
+    if (Math.abs(delta) <= 2)  return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
+    return { color: '#f0a500', arrow: delta > 0 ? '↑' : '↓' };
+  } else {
+    if (delta <= -t.bad)       return { color: '#ff4d4d', arrow: '↓' };
+    if (delta >= t.good)       return { color: '#32cd32', arrow: '↑' };
+    if (Math.abs(delta) <= 2)  return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
+    return { color: '#f0a500', arrow: delta > 0 ? '↑' : '↓' };
+  }
 }
 
 function healthDot(score) {
@@ -52,8 +66,8 @@ function healthDot(score) {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function DeltaCell({ curr, delta, format, lowerIsBetter }) {
-  const { color, arrow } = getDeltaColor(delta, lowerIsBetter);
+function DeltaCell({ curr, delta, format, lowerIsBetter, thresholds }) {
+  const { color, arrow } = getDeltaColor(delta, lowerIsBetter, thresholds);
   const sign = delta > 0 ? '+' : '';
   return (
     <td style={tds.metricCell}>
@@ -194,22 +208,41 @@ function InfoModal({ row, onClose }) {
 
 // ── Health Rules Modal ─────────────────────────────────────────────────────────
 
+const WEIGHT_KEYS = [
+  { key: 'costPerResult', label: 'Cost / Result', lowerIsBetter: true  },
+  { key: 'results',       label: 'Results',       lowerIsBetter: false },
+  { key: 'ctr',           label: 'CTR',           lowerIsBetter: false },
+  { key: 'cpm',           label: 'CPM',           lowerIsBetter: true  },
+  { key: 'frequency',     label: 'Frequency',     lowerIsBetter: true  },
+];
+
 function WeightsModal({ onClose, onSaved }) {
   const toast = useToast();
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [settings, setSettings] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(null);
-  const [confirm, setConfirm] = useState(null);
-  const [drafts, setDrafts] = useState({});
+  const [settings,       setSettings]       = useState([]);
+  const [loading,        setLoading]        = useState(true);
+  const [saving,         setSaving]         = useState(null);
+  const [confirm,        setConfirm]        = useState(null);
+  const [drafts,         setDrafts]         = useState({});
+  const [draftThresholds, setDraftThresholds] = useState({});
 
   useEffect(() => {
     compareAPI.getSettings().then(r => {
       setSettings(r.settings);
-      const d = {};
-      r.settings.forEach(s => { d[s.id] = { ...s.weights }; });
+      const d = {}, dt = {};
+      r.settings.forEach(s => {
+        d[s.id]  = { ...s.weights };
+        dt[s.id] = {
+          costPerResult: { ...DELTA_DEFAULTS.costPerResult, ...(s.deltaThresholds?.costPerResult || {}) },
+          results:       { ...DELTA_DEFAULTS.results,       ...(s.deltaThresholds?.results       || {}) },
+          ctr:           { ...DELTA_DEFAULTS.ctr,           ...(s.deltaThresholds?.ctr           || {}) },
+          cpm:           { ...DELTA_DEFAULTS.cpm,           ...(s.deltaThresholds?.cpm           || {}) },
+          frequency:     { ...DELTA_DEFAULTS.frequency,     ...(s.deltaThresholds?.frequency     || {}) },
+        };
+      });
       setDrafts(d);
+      setDraftThresholds(dt);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -218,18 +251,26 @@ function WeightsModal({ onClose, onSaved }) {
     setDrafts(p => ({ ...p, [clientId]: { ...p[clientId], [key]: num } }));
   };
 
+  const setDT = (clientId, metric, field, val) => {
+    const num = Math.max(1, Math.min(100, Number(val) || 1));
+    setDraftThresholds(p => ({
+      ...p,
+      [clientId]: { ...p[clientId], [metric]: { ...(p[clientId]?.[metric] || {}), [field]: num } },
+    }));
+  };
+
   const total = (clientId) => Object.values(drafts[clientId] || {}).reduce((s, v) => s + Number(v), 0);
 
   const handleSave = (clientId) => {
     const t = total(clientId);
-    if (Math.abs(t - 100) > 1) return toast(`Values must sum to 100 (currently ${t})`, 'error');
+    if (Math.abs(t - 100) > 1) return toast(`Weight values must sum to 100 (currently ${t})`, 'error');
     setConfirm(clientId);
   };
 
   const confirmSave = async () => {
     setSaving(confirm);
     try {
-      await compareAPI.saveSettings(confirm, drafts[confirm]);
+      await compareAPI.saveSettings(confirm, drafts[confirm], draftThresholds[confirm]);
       toast('Health rules saved.', 'success');
       setConfirm(null);
       onSaved();
@@ -238,22 +279,14 @@ function WeightsModal({ onClose, onSaved }) {
     } finally { setSaving(null); }
   };
 
-  const WEIGHT_KEYS = [
-    { key: 'costPerResult', label: 'Cost / Result', hint: 'Lower is better' },
-    { key: 'results',       label: 'Results Volume', hint: 'Higher is better' },
-    { key: 'ctr',           label: 'CTR',             hint: 'Higher is better' },
-    { key: 'cpm',           label: 'CPM',             hint: 'Lower is better' },
-    { key: 'frequency',     label: 'Frequency',       hint: 'Lower is better' },
-  ];
-
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 660, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 700, width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div>
             <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>⚖️ Health Rules</h2>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Set how much each metric contributes to the health score. Values must sum to 100.
+              Set the importance weight of each metric (must total 100), and the % change thresholds for green/red signals.
             </p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -264,8 +297,9 @@ function WeightsModal({ onClose, onSaved }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             {settings.map(s => {
-              const d = drafts[s.id] || s.weights;
-              const t = total(s.id);
+              const d  = drafts[s.id] || s.weights;
+              const dt = draftThresholds[s.id] || DELTA_DEFAULTS;
+              const t  = total(s.id);
               const valid = Math.abs(t - 100) <= 1;
               return (
                 <div key={s.id} style={{ borderRadius: 10, border: '1px solid rgba(50,205,50,0.12)', padding: '16px 18px' }}>
@@ -275,37 +309,74 @@ function WeightsModal({ onClose, onSaved }) {
                       <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>{s.clientCode}</span>
                     </div>
                     <span style={{ fontSize: 11, fontWeight: 700, color: valid ? '#32cd32' : '#ff4d4d' }}>
-                      Total: {t}
+                      Total weight: {t}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {WEIGHT_KEYS.map(({ key, label, hint }) => (
-                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ width: 120, flexShrink: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</div>
-                          <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{hint}</div>
-                        </div>
-                        <input
-                          type="range" min={0} max={100} step={5}
-                          value={d[key] || 0}
-                          onChange={e => setW(s.id, key, e.target.value)}
-                          disabled={!isAdmin}
-                          style={{ flex: 1, accentColor: '#32cd32' }}
-                        />
-                        <input
-                          type="number" min={0} max={100} step={5}
-                          value={d[key] || 0}
-                          onChange={e => setW(s.id, key, e.target.value)}
-                          disabled={!isAdmin}
-                          className="form-input"
-                          style={{
-                            width: 58, textAlign: 'center', fontSize: 13, fontWeight: 700,
-                            color: '#32cd32', padding: '4px 6px',
-                          }}
-                        />
-                      </div>
-                    ))}
+
+                  {/* Column headers */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 58px 80px 80px', gap: '8px 10px', alignItems: 'center', marginBottom: 6 }}>
+                    <div style={gs.colHeader}>Metric</div>
+                    <div style={gs.colHeader}>Weight</div>
+                    <div style={{ ...gs.colHeader, textAlign: 'center' }}>%</div>
+                    <div style={{ ...gs.colHeader, textAlign: 'center', color: '#32cd32' }}>🟢 Green if</div>
+                    <div style={{ ...gs.colHeader, textAlign: 'center', color: '#ff4d4d' }}>🔴 Red if</div>
                   </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {WEIGHT_KEYS.map(({ key, label, lowerIsBetter }) => {
+                      const thr = dt[key] || DELTA_DEFAULTS[key];
+                      const greenLabel = lowerIsBetter ? `drops >${thr.good}%` : `rises >${thr.good}%`;
+                      const redLabel   = lowerIsBetter ? `rises >${thr.bad}%`  : `drops >${thr.bad}%`;
+                      return (
+                        <div key={key} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 58px 80px 80px', gap: '0 10px', alignItems: 'center' }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</div>
+                            <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{lowerIsBetter ? 'Lower = better' : 'Higher = better'}</div>
+                          </div>
+                          <input
+                            type="range" min={0} max={100} step={5}
+                            value={d[key] || 0}
+                            onChange={e => setW(s.id, key, e.target.value)}
+                            disabled={!isAdmin}
+                            style={{ accentColor: '#32cd32', width: '100%' }}
+                          />
+                          <input
+                            type="number" min={0} max={100} step={5}
+                            value={d[key] || 0}
+                            onChange={e => setW(s.id, key, e.target.value)}
+                            disabled={!isAdmin}
+                            className="form-input"
+                            style={{ width: '100%', textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }}
+                          />
+                          {/* Green threshold */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            <input
+                              type="number" min={1} max={100} step={1}
+                              value={thr.good}
+                              onChange={e => setDT(s.id, key, 'good', e.target.value)}
+                              disabled={!isAdmin}
+                              className="form-input"
+                              style={{ width: 44, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#32cd32', padding: '3px 4px' }}
+                            />
+                            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>%</span>
+                          </div>
+                          {/* Red threshold */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                            <input
+                              type="number" min={1} max={100} step={1}
+                              value={thr.bad}
+                              onChange={e => setDT(s.id, key, 'bad', e.target.value)}
+                              disabled={!isAdmin}
+                              className="form-input"
+                              style={{ width: 44, textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#ff4d4d', padding: '3px 4px' }}
+                            />
+                            <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
                   {isAdmin && (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
                       <button
@@ -693,6 +764,19 @@ export default function CompareMonitor() {
   const activeFiltersCount = [search, statusFlt !== 'all', minSpend, badgeFlt !== 'all'].filter(Boolean).length;
   const selectedCount = selected.size;
 
+  // ── Delta thresholds (from API or defaults) ────────────────────────────────────
+
+  const deltaThresholds = useMemo(() => {
+    const saved = meta?.client?.compareDeltaThresholds || {};
+    return {
+      costPerResult: { ...DELTA_DEFAULTS.costPerResult, ...(saved.costPerResult || {}) },
+      results:       { ...DELTA_DEFAULTS.results,       ...(saved.results       || {}) },
+      ctr:           { ...DELTA_DEFAULTS.ctr,           ...(saved.ctr           || {}) },
+      cpm:           { ...DELTA_DEFAULTS.cpm,           ...(saved.cpm           || {}) },
+      frequency:     { ...DELTA_DEFAULTS.frequency,     ...(saved.frequency     || {}) },
+    };
+  }, [meta]);
+
   // ── Row renderer ───────────────────────────────────────────────────────────────
 
   const renderRow = (row) => {
@@ -739,11 +823,11 @@ export default function CompareMonitor() {
         </td>
 
         <SpendCell curr={row.curr.spend} />
-        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} />
-        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} />
-        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true} />
-        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} />
-        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true} />
+        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} thresholds={deltaThresholds.results} />
+        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} thresholds={deltaThresholds.ctr} />
+        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.cpm} />
+        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} thresholds={deltaThresholds.frequency} />
+        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true}  thresholds={deltaThresholds.costPerResult} />
 
         <td style={tds.metricCell}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1081,4 +1165,5 @@ const tds = {
 
 const gs = {
   sectionLabel: { fontSize: 10, fontWeight: 700, color: '#32cd32', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 10 },
+  colHeader:    { fontSize: 10, fontWeight: 700, color: 'var(--text-dim)', letterSpacing: 0.8, textTransform: 'uppercase' },
 };

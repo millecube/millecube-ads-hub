@@ -93,7 +93,7 @@ export const performanceAPI = {
 export const compareAPI = {
   fetch:          (params)            => api.get('/compare', { params }).then(r => r.data),
   getSettings:    ()                  => api.get('/compare/settings').then(r => r.data),
-  saveSettings:   (clientId, weights) => api.put(`/compare/settings/${clientId}`, { weights }).then(r => r.data),
+  saveSettings:   (clientId, weights, deltaThresholds) => api.put(`/compare/settings/${clientId}`, { weights, deltaThresholds }).then(r => r.data),
   updateBudget:   (data)              => api.patch('/compare/budget', data).then(r => r.data),
 };
 
