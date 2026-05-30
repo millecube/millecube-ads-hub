@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { compareAPI, clientsAPI, performanceAPI } from '../utils/api';
 import { useToast } from '../hooks/useToast';
 import { useAuth } from '../context/AuthContext';
@@ -6,9 +6,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const fmtRM   = v  => v > 0 ? `RM ${v.toFixed(2)}` : '—';
-const fmtPct  = v  => v !== null && v !== undefined ? `${v.toFixed(2)}%` : '—';
-const fmtNum  = v  => v > 0 ? Math.round(v).toLocaleString() : '—';
+const fmtRM  = v => v > 0 ? `RM ${v.toFixed(2)}` : '—';
+const fmtPct = v => v !== null && v !== undefined ? `${v.toFixed(2)}%` : '—';
+const fmtNum = v => v > 0 ? Math.round(v).toLocaleString() : '—';
 
 const PERIOD_OPTIONS = [
   { value: 'today',      label: 'Today' },
@@ -19,7 +19,11 @@ const PERIOD_OPTIONS = [
   { value: 'this_month', label: 'This Month' },
 ];
 
-const LEVEL_OPTIONS = ['campaign', 'adset', 'ad'];
+const LEVEL_TABS = [
+  { value: 'campaign', label: 'Campaign', icon: '📢' },
+  { value: 'adset',   label: 'Ad Set',   icon: '🎯' },
+  { value: 'ad',      label: 'Ad',       icon: '🖼️' },
+];
 
 const BADGE_META = {
   SCALE:   { color: '#32cd32',  bg: 'rgba(50,205,50,0.15)',   label: 'SCALE'   },
@@ -33,7 +37,7 @@ function getDeltaColor(delta, lowerIsBetter) {
   if (delta === null || delta === undefined) return { color: 'var(--text-dim)', arrow: '—' };
   const isGood = lowerIsBetter ? delta < 0 : delta > 0;
   const magnitude = Math.abs(delta);
-  if (isGood && magnitude > 2)  return { color: '#32cd32', arrow: lowerIsBetter ? '↓' : '↑' };
+  if (isGood && magnitude > 2)   return { color: '#32cd32', arrow: lowerIsBetter ? '↓' : '↑' };
   if (!isGood && magnitude > 10) return { color: '#ff4d4d', arrow: lowerIsBetter ? '↑' : '↓' };
   if (magnitude <= 2)            return { color: 'rgba(232,245,233,0.3)', arrow: '→' };
   return { color: '#f0a500', arrow: !isGood ? (lowerIsBetter ? '↑' : '↓') : (lowerIsBetter ? '↓' : '↑') };
@@ -46,7 +50,7 @@ function healthDot(score) {
   return '#ff4d4d';
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function DeltaCell({ curr, delta, format, lowerIsBetter }) {
   const { color, arrow } = getDeltaColor(delta, lowerIsBetter);
@@ -55,12 +59,18 @@ function DeltaCell({ curr, delta, format, lowerIsBetter }) {
     <td style={tds.metricCell}>
       <div style={tds.currVal}>{curr !== null && curr !== undefined ? format(curr) : '—'}</div>
       {delta !== null && delta !== undefined ? (
-        <div style={{ fontSize: 10, color, marginTop: 1 }}>
-          {arrow} {sign}{delta.toFixed(1)}%
-        </div>
+        <div style={{ fontSize: 10, color, marginTop: 1 }}>{arrow} {sign}{delta.toFixed(1)}%</div>
       ) : (
         <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 1 }}>no prev data</div>
       )}
+    </td>
+  );
+}
+
+function SpendCell({ curr }) {
+  return (
+    <td style={tds.metricCell}>
+      <div style={tds.currVal}>{curr != null && curr > 0 ? fmtRM(curr) : '—'}</div>
     </td>
   );
 }
@@ -123,7 +133,66 @@ function BudgetChip({ row, onEdit }) {
   );
 }
 
-// ── Health Weights Modal ──────────────────────────────────────────────────────
+// ── Info Modal ─────────────────────────────────────────────────────────────────
+
+function InfoKV({ label, value }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
+      <div style={{ width: 140, fontSize: 11, color: 'var(--text-dim)', fontWeight: 600, flexShrink: 0 }}>{label}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{value || '—'}</div>
+    </div>
+  );
+}
+
+function InfoModal({ row, onClose }) {
+  const targeting = row.info?.targeting;
+
+  const formatAge = t => !t ? '—' : `${t.age_min || 18}–${t.age_max || '65+'}`;
+  const formatGenders = t => {
+    if (!t?.genders?.length) return 'All genders';
+    return t.genders.map(g => g === 1 ? 'Male' : g === 2 ? 'Female' : g).join(', ');
+  };
+  const formatLocations = t => {
+    if (!t?.geo_locations) return '—';
+    const parts = [
+      ...(t.geo_locations.countries || []).map(c => c.name || c.key),
+      ...(t.geo_locations.regions   || []).map(r => r.name),
+      ...(t.geo_locations.cities    || []).map(c => c.name),
+    ];
+    return parts.length ? parts.slice(0, 6).join(', ') + (parts.length > 6 ? ` +${parts.length - 6} more` : '') : '—';
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-box glass" style={{ maxWidth: 400, width: '100%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>
+            {row.level === 'campaign' ? '📢 Campaign Info' : '🎯 Ad Set Info'}
+          </h3>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 16, wordBreak: 'break-word' }}>
+          {row.name}
+        </p>
+        {row.level === 'campaign' ? (
+          <InfoKV label="Objective" value={row.info?.objective || row.objective} />
+        ) : (
+          <>
+            <InfoKV label="Optimization Goal" value={row.info?.optimization_goal || row.objective} />
+            <InfoKV label="Billing Event"     value={row.info?.billing_event} />
+            {targeting && <>
+              <InfoKV label="Age Range"  value={formatAge(targeting)} />
+              <InfoKV label="Genders"    value={formatGenders(targeting)} />
+              <InfoKV label="Locations"  value={formatLocations(targeting)} />
+            </>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Health Rules Modal ─────────────────────────────────────────────────────────
 
 function WeightsModal({ onClose, onSaved }) {
   const toast = useToast();
@@ -145,14 +214,15 @@ function WeightsModal({ onClose, onSaved }) {
   }, []);
 
   const setW = (clientId, key, val) => {
-    setDrafts(p => ({ ...p, [clientId]: { ...p[clientId], [key]: Number(val) } }));
+    const num = Math.max(0, Math.min(100, Number(val) || 0));
+    setDrafts(p => ({ ...p, [clientId]: { ...p[clientId], [key]: num } }));
   };
 
   const total = (clientId) => Object.values(drafts[clientId] || {}).reduce((s, v) => s + Number(v), 0);
 
   const handleSave = (clientId) => {
     const t = total(clientId);
-    if (Math.abs(t - 100) > 1) return toast(`Weights must sum to 100 (currently ${t})`, 'error');
+    if (Math.abs(t - 100) > 1) return toast(`Values must sum to 100 (currently ${t})`, 'error');
     setConfirm(clientId);
   };
 
@@ -160,7 +230,7 @@ function WeightsModal({ onClose, onSaved }) {
     setSaving(confirm);
     try {
       await compareAPI.saveSettings(confirm, drafts[confirm]);
-      toast('Health weights saved.', 'success');
+      toast('Health rules saved.', 'success');
       setConfirm(null);
       onSaved();
     } catch (err) {
@@ -178,12 +248,12 @@ function WeightsModal({ onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box glass" style={{ maxWidth: 640, width: '100%' }}>
+      <div className="modal-box glass" style={{ maxWidth: 660, width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div>
-            <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>⚖️ Health Score Weights</h2>
+            <h2 style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>⚖️ Health Rules</h2>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Adjust how much each metric contributes to the health score. Weights must sum to 100.
+              Set how much each metric contributes to the health score. Values must sum to 100.
             </p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
@@ -210,8 +280,8 @@ function WeightsModal({ onClose, onSaved }) {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {WEIGHT_KEYS.map(({ key, label, hint }) => (
-                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <div style={{ width: 130, flexShrink: 0 }}>
+                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 120, flexShrink: 0 }}>
                           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{label}</div>
                           <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>{hint}</div>
                         </div>
@@ -222,9 +292,17 @@ function WeightsModal({ onClose, onSaved }) {
                           disabled={!isAdmin}
                           style={{ flex: 1, accentColor: '#32cd32' }}
                         />
-                        <div style={{ width: 36, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#32cd32' }}>
-                          {d[key] || 0}
-                        </div>
+                        <input
+                          type="number" min={0} max={100} step={5}
+                          value={d[key] || 0}
+                          onChange={e => setW(s.id, key, e.target.value)}
+                          disabled={!isAdmin}
+                          className="form-input"
+                          style={{
+                            width: 58, textAlign: 'center', fontSize: 13, fontWeight: 700,
+                            color: '#32cd32', padding: '4px 6px',
+                          }}
+                        />
                       </div>
                     ))}
                   </div>
@@ -245,7 +323,6 @@ function WeightsModal({ onClose, onSaved }) {
           </div>
         )}
 
-        {/* Reconfirm dialog */}
         <AnimatePresence>
           {confirm && (
             <motion.div
@@ -257,11 +334,11 @@ function WeightsModal({ onClose, onSaved }) {
                 className="glass" style={{ padding: '28px 32px', borderRadius: 14, textAlign: 'center', maxWidth: 340 }}
               >
                 <div style={{ fontSize: 32, marginBottom: 12 }}>⚖️</div>
-                <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>Confirm Weight Change</h3>
+                <h3 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>Confirm Rule Change</h3>
                 <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 20 }}>
-                  This will update the health score formula for <strong style={{ color: 'var(--text-primary)' }}>
+                  This will update the health rules for <strong style={{ color: 'var(--text-primary)' }}>
                     {settings.find(s => s.id === confirm)?.name}
-                  </strong>. New weights will apply on next data fetch.
+                  </strong>. New rules will apply on next data fetch.
                 </p>
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                   <button className="btn btn-ghost" onClick={() => setConfirm(null)}>Cancel</button>
@@ -278,14 +355,14 @@ function WeightsModal({ onClose, onSaved }) {
   );
 }
 
-// ── Colour Guide Modal ────────────────────────────────────────────────────────
+// ── Colour Guide Modal ─────────────────────────────────────────────────────────
 
 function ColourGuide({ onClose }) {
   const rules = [
     { color: '#32cd32', label: 'Green', desc: 'Positive change (>2%) in the right direction — metric improving' },
-    { color: '#ff4d4d', label: 'Red',   desc: 'Negative change (>10%) in the wrong direction, or metric above threshold' },
+    { color: '#ff4d4d', label: 'Red',   desc: 'Negative change (>10%) in the wrong direction' },
     { color: '#f0a500', label: 'Yellow', desc: 'Minor negative change (2–10%) — monitor closely' },
-    { color: 'rgba(232,245,233,0.3)', label: 'Grey', desc: 'Flat change (≤2%) or no previous period data available' },
+    { color: 'rgba(232,245,233,0.3)', label: 'Grey', desc: 'Flat change (≤2%) or no previous period data' },
   ];
   const badges = [
     { ...BADGE_META.SCALE,   desc: 'Health ≥75, 3+ green signals — ready to increase budget' },
@@ -345,7 +422,7 @@ function ColourGuide({ onClose }) {
   );
 }
 
-// ── Budget Edit Modal ─────────────────────────────────────────────────────────
+// ── Budget Edit Modal ──────────────────────────────────────────────────────────
 
 function BudgetEditModal({ row, clientId, onClose, onSaved }) {
   const toast = useToast();
@@ -395,7 +472,7 @@ function BudgetEditModal({ row, clientId, onClose, onSaved }) {
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Main Page ──────────────────────────────────────────────────────────────────
 
 const SORT_DEFAULTS = { col: 'healthScore', dir: 'asc' };
 
@@ -413,11 +490,11 @@ export default function CompareMonitor() {
   const [error,       setError]       = useState(null);
 
   // Filters
-  const [quickChip,   setQuickChip]   = useState('all');
-  const [search,      setSearch]      = useState('');
-  const [statusFlt,   setStatusFlt]   = useState('all');   // all | active | paused
-  const [minSpend,    setMinSpend]    = useState('');
-  const [badgeFlt,    setBadgeFlt]    = useState('all');   // all | SCALE | KEEP | WATCH | PAUSE | REFRESH
+  const [quickChip,  setQuickChip]  = useState('all');
+  const [search,     setSearch]     = useState('');
+  const [statusFlt,  setStatusFlt]  = useState('all');
+  const [minSpend,   setMinSpend]   = useState('');
+  const [badgeFlt,   setBadgeFlt]   = useState('all');
 
   // Sort
   const [sort, setSort] = useState(SORT_DEFAULTS);
@@ -425,14 +502,18 @@ export default function CompareMonitor() {
   // Selection
   const [selected, setSelected] = useState(new Set());
 
-  // Modals
-  const [showWeights,     setShowWeights]     = useState(false);
-  const [showGuide,       setShowGuide]       = useState(false);
-  const [editBudget,      setEditBudget]      = useState(null);
-  const [bulkAction,      setBulkAction]      = useState(null); // 'pause' | 'enable'
-  const [bulkBusy,        setBulkBusy]        = useState(false);
+  // Grouping expand/collapse
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+  const [expandedPaused,  setExpandedPaused]  = useState(new Set());
 
-  // Load clients
+  // Modals
+  const [showWeights,  setShowWeights]  = useState(false);
+  const [showGuide,    setShowGuide]    = useState(false);
+  const [editBudget,   setEditBudget]   = useState(null);
+  const [infoRow,      setInfoRow]      = useState(null);
+  const [bulkAction,   setBulkAction]   = useState(null);
+  const [bulkBusy,     setBulkBusy]     = useState(false);
+
   useEffect(() => {
     clientsAPI.getAssigned().then(list => {
       setClients(list);
@@ -440,19 +521,24 @@ export default function CompareMonitor() {
     });
   }, []);
 
-  // Persist prefs
   useEffect(() => { if (clientId) localStorage.setItem('cm_clientId', clientId); }, [clientId]);
   useEffect(() => { localStorage.setItem('cm_period', period); }, [period]);
   useEffect(() => { localStorage.setItem('cm_level', level); }, [level]);
 
-  const fetchData = useCallback(async (force = false) => {
+  // Reset group state when data refreshes
+  useEffect(() => {
+    setCollapsedGroups(new Set());
+    setExpandedPaused(new Set());
+    setSelected(new Set());
+  }, [rows]);
+
+  const fetchData = useCallback(async () => {
     if (!clientId) return;
     setLoading(true); setError(null);
     try {
       const res = await compareAPI.fetch({ clientId, range: period, level });
       setRows(res.rows || []);
       setMeta(res);
-      setSelected(new Set());
     } catch (err) {
       setError(err.response?.data?.error || err.message);
     } finally { setLoading(false); }
@@ -460,38 +546,36 @@ export default function CompareMonitor() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Filtering ────────────────────────────────────────────────────────────────
+  // ── Filtering & sorting ────────────────────────────────────────────────────────
 
   const filteredRows = useMemo(() => {
     let r = [...rows];
 
     if (quickChip === 'pause')   r = r.filter(x => x.badge === 'PAUSE');
-    else if (quickChip === 'scale')  r = r.filter(x => x.badge === 'SCALE');
-    else if (quickChip === 'watch')  r = r.filter(x => ['WATCH', 'REFRESH'].includes(x.badge));
-    else if (quickChip === 'off')    r = r.filter(x => x.status === 'PAUSED');
+    else if (quickChip === 'scale')   r = r.filter(x => x.badge === 'SCALE');
+    else if (quickChip === 'watch')   r = r.filter(x => ['WATCH', 'REFRESH'].includes(x.badge));
+    else if (quickChip === 'off')     r = r.filter(x => x.status === 'PAUSED');
     else if (quickChip === 'fatigue') r = r.filter(x => x.badge === 'REFRESH');
 
-    if (search)    r = r.filter(x => x.name?.toLowerCase().includes(search.toLowerCase()) || x.parentName?.toLowerCase().includes(search.toLowerCase()));
+    if (search)           r = r.filter(x => x.name?.toLowerCase().includes(search.toLowerCase()) || x.parentName?.toLowerCase().includes(search.toLowerCase()));
     if (statusFlt !== 'all') r = r.filter(x => x.status === (statusFlt === 'active' ? 'ACTIVE' : 'PAUSED'));
-    if (minSpend)  r = r.filter(x => x.curr.spend >= parseFloat(minSpend));
+    if (minSpend)         r = r.filter(x => x.curr.spend >= parseFloat(minSpend));
     if (badgeFlt !== 'all') r = r.filter(x => x.badge === badgeFlt);
 
-    // Sort
     if (sort.col) {
       r.sort((a, b) => {
-        let av, bv;
-        const getVal = (row) => {
-          if (sort.col === 'name')          return row.name?.toLowerCase() || '';
-          if (sort.col === 'healthScore')   return row.healthScore || 0;
-          if (sort.col === 'badge')         return ['PAUSE','REFRESH','WATCH','KEEP','SCALE'].indexOf(row.badge);
-          if (sort.col === 'status')        return row.status === 'ACTIVE' ? 0 : 1;
-          if (sort.col === 'budget')        return row.budget?.amount || 0;
+        const getVal = row => {
+          if (sort.col === 'name')        return row.name?.toLowerCase() || '';
+          if (sort.col === 'healthScore') return row.healthScore || 0;
+          if (sort.col === 'badge')       return ['PAUSE','REFRESH','WATCH','KEEP','SCALE'].indexOf(row.badge);
+          if (sort.col === 'status')      return row.status === 'ACTIVE' ? 0 : 1;
+          if (sort.col === 'budget')      return row.budget?.amount || 0;
           const [group, key] = sort.col.split('.');
-          if (group === 'curr')   return row.curr?.[key] || 0;
-          if (group === 'delta')  return row.deltas?.[key] ?? -9999;
+          if (group === 'curr')  return row.curr?.[key] || 0;
+          if (group === 'delta') return row.deltas?.[key] ?? -9999;
           return 0;
         };
-        av = getVal(a); bv = getVal(b);
+        const av = getVal(a), bv = getVal(b);
         if (typeof av === 'string') return sort.dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
         return sort.dir === 'asc' ? av - bv : bv - av;
       });
@@ -500,13 +584,58 @@ export default function CompareMonitor() {
     return r;
   }, [rows, quickChip, search, statusFlt, minSpend, badgeFlt, sort]);
 
-  // ── Sort handler ─────────────────────────────────────────────────────────────
+  // ── Grouping ───────────────────────────────────────────────────────────────────
 
-  const handleSort = (col) => {
-    setSort(prev => {
-      if (prev.col === col) return { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
-      return { col, dir: 'asc' };
+  // Auto-expand paused sections when filtering for paused items
+  const autoExpandPaused = statusFlt === 'paused' || quickChip === 'off';
+
+  const groupedRows = useMemo(() => {
+    if (level === 'campaign') {
+      return [{
+        key: '__all__',
+        label: null,
+        activeRows: filteredRows.filter(r => r.status === 'ACTIVE'),
+        pausedRows: filteredRows.filter(r => r.status !== 'ACTIVE'),
+      }];
+    }
+    const groupMap = new Map();
+    const groupOrder = [];
+    filteredRows.forEach(row => {
+      const key = row.parentId || row.parentName || '__unknown__';
+      if (!groupMap.has(key)) {
+        groupMap.set(key, { key, label: row.parentName || 'Unknown', activeRows: [], pausedRows: [] });
+        groupOrder.push(key);
+      }
+      const g = groupMap.get(key);
+      (row.status === 'ACTIVE' ? g.activeRows : g.pausedRows).push(row);
     });
+    return groupOrder.map(k => groupMap.get(k));
+  }, [filteredRows, level]);
+
+  const toggleGroup = key => {
+    setCollapsedGroups(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  };
+  const togglePaused = key => {
+    setExpandedPaused(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  };
+
+  // Visible rows (for selection logic)
+  const visibleRows = useMemo(() => {
+    const visible = [];
+    groupedRows.forEach(g => {
+      if (collapsedGroups.has(g.key)) return;
+      g.activeRows.forEach(r => visible.push(r));
+      if (autoExpandPaused || expandedPaused.has(g.key)) {
+        g.pausedRows.forEach(r => visible.push(r));
+      }
+    });
+    return visible;
+  }, [groupedRows, collapsedGroups, expandedPaused, autoExpandPaused]);
+
+  // ── Sort ───────────────────────────────────────────────────────────────────────
+
+  const handleSort = col => {
+    setSort(prev => prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' });
   };
 
   const SortIcon = ({ col }) => {
@@ -514,22 +643,24 @@ export default function CompareMonitor() {
     return <span style={{ fontSize: 9, color: '#32cd32', marginLeft: 3 }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>;
   };
 
-  // ── Selection ────────────────────────────────────────────────────────────────
+  const Th = ({ col, children, style: sx }) => (
+    <th onClick={() => handleSort(col)} style={{ ...tds.th, cursor: 'pointer', userSelect: 'none', ...sx }}>
+      {children}<SortIcon col={col} />
+    </th>
+  );
 
-  const allSelected = filteredRows.length > 0 && filteredRows.every(r => selected.has(r.id));
+  // ── Selection ──────────────────────────────────────────────────────────────────
+
+  const allSelected = visibleRows.length > 0 && visibleRows.every(r => selected.has(r.id));
   const toggleAll   = () => {
     if (allSelected) setSelected(new Set());
-    else setSelected(new Set(filteredRows.map(r => r.id)));
+    else setSelected(new Set(visibleRows.map(r => r.id)));
   };
-  const toggleRow = (id) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleRow = id => {
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
-  // ── Bulk actions ─────────────────────────────────────────────────────────────
+  // ── Bulk actions ───────────────────────────────────────────────────────────────
 
   const executeBulk = async () => {
     setBulkBusy(true);
@@ -549,7 +680,7 @@ export default function CompareMonitor() {
     fetchData();
   };
 
-  // ── Quick chip counts ─────────────────────────────────────────────────────────
+  // ── Quick chip counts ──────────────────────────────────────────────────────────
 
   const chipCounts = useMemo(() => ({
     pause:   rows.filter(r => r.badge === 'PAUSE').length,
@@ -560,17 +691,85 @@ export default function CompareMonitor() {
   }), [rows]);
 
   const activeFiltersCount = [search, statusFlt !== 'all', minSpend, badgeFlt !== 'all'].filter(Boolean).length;
-
-  // ── Render ────────────────────────────────────────────────────────────────────
-
   const selectedCount = selected.size;
-  const currentClient = clients.find(c => c.id === clientId);
 
-  const Th = ({ col, children, style: sx }) => (
-    <th onClick={() => handleSort(col)} style={{ ...tds.th, cursor: 'pointer', userSelect: 'none', ...sx }}>
-      {children}<SortIcon col={col} />
-    </th>
-  );
+  // ── Row renderer ───────────────────────────────────────────────────────────────
+
+  const renderRow = (row) => {
+    const isSelected = selected.has(row.id);
+    const bm = BADGE_META[row.badge] || BADGE_META.KEEP;
+    const hasInfo = row.level === 'campaign' || row.level === 'adset';
+
+    return (
+      <tr key={row.id} style={{ background: isSelected ? 'rgba(50,205,50,0.05)' : undefined }}>
+        <td style={{ padding: '10px 8px' }}>
+          <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)}
+            style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
+        </td>
+
+        <td style={tds.nameCell}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
+            <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.3, flex: 1, wordBreak: 'break-word' }}>
+              {row.name}
+            </div>
+            {hasInfo && (
+              <button
+                onClick={() => setInfoRow(row)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: 12, padding: '0 2px', flexShrink: 0, lineHeight: 1.2 }}
+                title="View info"
+              >ⓘ</button>
+            )}
+          </div>
+        </td>
+
+        <td style={tds.metricCell}>
+          <span style={{
+            fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
+            background: row.status === 'ACTIVE' ? 'rgba(50,205,50,0.15)' : 'rgba(136,136,136,0.12)',
+            color: row.status === 'ACTIVE' ? '#32cd32' : '#888',
+          }}>
+            {row.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'}
+          </span>
+        </td>
+
+        <td style={tds.metricCell}>
+          {row.budget
+            ? <BudgetChip row={row} onEdit={setEditBudget} />
+            : <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>}
+        </td>
+
+        <SpendCell curr={row.curr.spend} />
+        <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} />
+        <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} />
+        <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true} />
+        <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} />
+        <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true} />
+
+        <td style={tds.metricCell}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ color: healthDot(row.healthScore), fontSize: 8 }}>●</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: healthDot(row.healthScore) }}>{row.healthScore}</span>
+          </div>
+        </td>
+
+        <td style={tds.metricCell}>
+          <span style={{
+            fontSize: 10, fontWeight: 800, letterSpacing: 0.4,
+            color: bm.color, background: bm.bg,
+            borderRadius: 4, padding: '3px 7px',
+          }}>
+            {bm.label}
+          </span>
+        </td>
+
+        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+          <ToggleBtn row={row} clientId={clientId} onDone={fetchData} />
+        </td>
+      </tr>
+    );
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────────
 
   return (
     <div style={s.page} className="page-wrap fade-up">
@@ -591,16 +790,15 @@ export default function CompareMonitor() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowGuide(true)}>🎨 Colour Guide</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowWeights(true)}>⚖️ Health Weights</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => fetchData(true)} disabled={loading}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowWeights(true)}>⚖️ Health Rules</button>
+          <button className="btn btn-ghost btn-sm" onClick={fetchData} disabled={loading}>
             {loading ? <div className="spinner" style={{ width: 13, height: 13 }} /> : '↻'} Refresh
           </button>
         </div>
       </div>
 
-      {/* Controls row */}
+      {/* Controls row — client + period only */}
       <div style={s.controls} className="glass">
-        {/* Client */}
         <div style={s.controlGroup}>
           <label style={s.controlLabel}>Client</label>
           <select className="form-input" style={s.controlSelect}
@@ -609,7 +807,6 @@ export default function CompareMonitor() {
           </select>
         </div>
 
-        {/* Period */}
         <div style={s.controlGroup}>
           <label style={s.controlLabel}>Period</label>
           <select className="form-input" style={s.controlSelect}
@@ -617,30 +814,17 @@ export default function CompareMonitor() {
             {PERIOD_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
-
-        {/* Level */}
-        <div style={s.controlGroup}>
-          <label style={s.controlLabel}>Level</label>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {LEVEL_OPTIONS.map(l => (
-              <button key={l} className={`btn btn-sm ${level === l ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setLevel(l)} style={{ textTransform: 'capitalize', minWidth: 64 }}>
-                {l}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
 
       {/* Quick chips */}
       <div style={s.chips}>
         {[
-          { id: 'all',    label: `All (${rows.length})` },
-          { id: 'pause',  label: `🔴 Pause Candidates (${chipCounts.pause})` },
-          { id: 'scale',  label: `🟢 Scale Opportunities (${chipCounts.scale})` },
-          { id: 'watch',  label: `🟡 Watch List (${chipCounts.watch})` },
-          { id: 'fatigue',label: `🟠 Creative Fatigue (${chipCounts.fatigue})` },
-          { id: 'off',    label: `⏸ Currently Off (${chipCounts.off})` },
+          { id: 'all',     label: `All (${rows.length})` },
+          { id: 'pause',   label: `🔴 Pause Candidates (${chipCounts.pause})` },
+          { id: 'scale',   label: `🟢 Scale Opportunities (${chipCounts.scale})` },
+          { id: 'watch',   label: `🟡 Watch List (${chipCounts.watch})` },
+          { id: 'fatigue', label: `🟠 Creative Fatigue (${chipCounts.fatigue})` },
+          { id: 'off',     label: `⏸ Currently Off (${chipCounts.off})` },
         ].map(chip => (
           <motion.button key={chip.id}
             onClick={() => setQuickChip(chip.id)}
@@ -648,10 +832,10 @@ export default function CompareMonitor() {
             transition={{ duration: 0.13 }}
             style={{
               ...s.chip,
-              background: quickChip === chip.id ? 'rgba(50,205,50,0.18)' : 'rgba(50,205,50,0.06)',
+              background:  quickChip === chip.id ? 'rgba(50,205,50,0.18)' : 'rgba(50,205,50,0.06)',
               border: `1px solid ${quickChip === chip.id ? 'rgba(50,205,50,0.55)' : 'rgba(50,205,50,0.15)'}`,
-              color: quickChip === chip.id ? '#32cd32' : 'var(--text-secondary)',
-              fontWeight: quickChip === chip.id ? 700 : 500,
+              color:       quickChip === chip.id ? '#32cd32' : 'var(--text-secondary)',
+              fontWeight:  quickChip === chip.id ? 700 : 500,
             }}
           >
             {chip.label}
@@ -679,7 +863,8 @@ export default function CompareMonitor() {
           value={minSpend} onChange={e => setMinSpend(e.target.value)}
           style={{ width: 130, fontSize: 12 }} />
         {activeFiltersCount > 0 && (
-          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setStatusFlt('all'); setMinSpend(''); setBadgeFlt('all'); }}>
+          <button className="btn btn-ghost btn-sm"
+            onClick={() => { setSearch(''); setStatusFlt('all'); setMinSpend(''); setBadgeFlt('all'); }}>
             ✕ Clear ({activeFiltersCount})
           </button>
         )}
@@ -697,22 +882,42 @@ export default function CompareMonitor() {
               <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
                 {selectedCount} selected
               </span>
-              <button className="btn btn-ghost btn-sm" onClick={() => setBulkAction('pause')}>
-                ⏸ Pause All
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setBulkAction('enable')}>
-                ▶ Enable All
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>
-                ✕ Deselect
-              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setBulkAction('pause')}>⏸ Pause All</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setBulkAction('enable')}>▶ Enable All</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelected(new Set())}>✕ Deselect</button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
+      {/* Level folder tabs */}
+      <div style={{ display: 'flex', gap: 2, marginBottom: 0 }}>
+        {LEVEL_TABS.map(tab => (
+          <motion.button key={tab.value}
+            onClick={() => setLevel(tab.value)}
+            whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
+            transition={{ duration: 0.12 }}
+            style={{
+              padding: '8px 18px',
+              border: level === tab.value
+                ? '1px solid rgba(50,205,50,0.3)'
+                : '1px solid rgba(50,205,50,0.1)',
+              borderBottom: level === tab.value ? '1px solid var(--card-bg)' : '1px solid rgba(50,205,50,0.1)',
+              borderRadius: '8px 8px 0 0',
+              background: level === tab.value ? 'var(--card-bg)' : 'rgba(50,205,50,0.03)',
+              color: level === tab.value ? '#32cd32' : 'var(--text-muted)',
+              fontWeight: level === tab.value ? 700 : 500,
+              fontSize: 12, cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            {tab.icon} {tab.label}
+          </motion.button>
+        ))}
+      </div>
+
       {/* Table */}
-      <div className="glass table-scroll-wrap" style={s.tableWrap}>
+      <div className="glass table-scroll-wrap" style={{ ...s.tableWrap, borderTopLeftRadius: 0 }}>
         {loading ? (
           <div style={s.center}><div className="spinner" /></div>
         ) : error ? (
@@ -725,107 +930,75 @@ export default function CompareMonitor() {
         ) : filteredRows.length === 0 ? (
           <div style={s.center}>No data matches your filters.</div>
         ) : (
-          <table className="data-table" style={{ minWidth: 1100 }}>
+          <table className="data-table" style={{ minWidth: 1050 }}>
             <thead>
               <tr>
                 <th style={{ width: 36, padding: '10px 8px' }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleAll}
                     style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
                 </th>
-                <Th col="name" style={{ minWidth: 200 }}>Name</Th>
-                <Th col="status" style={{ width: 80 }}>Status</Th>
-                <Th col="budget" style={{ width: 110 }}>Budget</Th>
-                <Th col="curr.spend" style={{ width: 110 }}>Spend</Th>
-                <Th col="curr.results" style={{ width: 100 }}>Results</Th>
-                <Th col="curr.ctr" style={{ width: 90 }}>CTR</Th>
-                <Th col="curr.cpm" style={{ width: 90 }}>CPM</Th>
-                <Th col="curr.frequency" style={{ width: 90 }}>Freq</Th>
+                <Th col="name"              style={{ minWidth: 200 }}>Name</Th>
+                <Th col="status"            style={{ width: 80 }}>Status</Th>
+                <Th col="budget"            style={{ width: 110 }}>Budget</Th>
+                <Th col="curr.spend"        style={{ width: 90 }}>Spend</Th>
+                <Th col="curr.results"      style={{ width: 100 }}>Results</Th>
+                <Th col="curr.ctr"          style={{ width: 90 }}>CTR</Th>
+                <Th col="curr.cpm"          style={{ width: 90 }}>CPM</Th>
+                <Th col="curr.frequency"    style={{ width: 90 }}>Freq</Th>
                 <Th col="curr.costPerResult" style={{ width: 120 }}>Cost/Result</Th>
-                <Th col="healthScore" style={{ width: 80 }}>Health</Th>
-                <Th col="badge" style={{ width: 90 }}>Badge</Th>
+                <Th col="healthScore"       style={{ width: 80 }}>Health</Th>
+                <Th col="badge"             style={{ width: 90 }}>Badge</Th>
                 <th style={tds.th}>On/Off</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map(row => {
-                const isSelected = selected.has(row.id);
-                const bm = BADGE_META[row.badge] || BADGE_META.KEEP;
+              {groupedRows.map(group => (
+                <React.Fragment key={group.key}>
+                  {/* Group header — shown for adset / ad levels */}
+                  {group.label && (
+                    <tr style={{ background: 'rgba(50,205,50,0.05)', borderTop: '1px solid rgba(50,205,50,0.1)' }}>
+                      <td colSpan={13} style={{ padding: '7px 12px' }}>
+                        <button
+                          onClick={() => toggleGroup(group.key)}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 12 }}
+                        >
+                          <span style={{ color: '#32cd32', fontSize: 9 }}>
+                            {collapsedGroups.has(group.key) ? '▶' : '▼'}
+                          </span>
+                          <strong style={{ color: 'var(--text-primary)', fontSize: 12 }}>{group.label}</strong>
+                          <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>
+                            {group.activeRows.length} active
+                            {group.pausedRows.length > 0 ? `, ${group.pausedRows.length} paused` : ''}
+                          </span>
+                        </button>
+                      </td>
+                    </tr>
+                  )}
 
-                return (
-                  <tr key={row.id} style={{ background: isSelected ? 'rgba(50,205,50,0.05)' : undefined }}>
-                    <td style={{ padding: '10px 8px' }}>
-                      <input type="checkbox" checked={isSelected} onChange={() => toggleRow(row.id)}
-                        style={{ accentColor: '#32cd32', cursor: 'pointer' }} />
-                    </td>
+                  {/* Active rows */}
+                  {!collapsedGroups.has(group.key) && group.activeRows.map(renderRow)}
 
-                    {/* Name */}
-                    <td style={tds.nameCell}>
-                      <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', lineHeight: 1.3 }}>
-                        {row.name}
-                      </div>
-                      {row.parentName && (
-                        <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>
-                          ↳ {row.parentName}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Status */}
-                    <td style={tds.metricCell}>
-                      <span style={{
-                        fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '2px 6px',
-                        background: row.status === 'ACTIVE' ? 'rgba(50,205,50,0.15)' : 'rgba(136,136,136,0.12)',
-                        color: row.status === 'ACTIVE' ? '#32cd32' : '#888',
-                      }}>
-                        {row.status === 'ACTIVE' ? 'ACTIVE' : 'PAUSED'}
-                      </span>
-                    </td>
-
-                    {/* Budget */}
-                    <td style={tds.metricCell}>
-                      {row.budget ? (
-                        <BudgetChip row={row} onEdit={setEditBudget} />
-                      ) : (
-                        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>—</span>
-                      )}
-                    </td>
-
-                    {/* Metric deltas */}
-                    <DeltaCell curr={row.curr.spend}         delta={row.deltas?.spend}         format={fmtRM}  lowerIsBetter={false} />
-                    <DeltaCell curr={row.curr.results}       delta={row.deltas?.results}       format={fmtNum} lowerIsBetter={false} />
-                    <DeltaCell curr={row.curr.ctr}           delta={row.deltas?.ctr}           format={fmtPct} lowerIsBetter={false} />
-                    <DeltaCell curr={row.curr.cpm}           delta={row.deltas?.cpm}           format={fmtRM}  lowerIsBetter={true} />
-                    <DeltaCell curr={row.curr.frequency}     delta={row.deltas?.frequency}     format={v => v.toFixed(2)} lowerIsBetter={true} />
-                    <DeltaCell curr={row.curr.costPerResult} delta={row.deltas?.costPerResult} format={fmtRM}  lowerIsBetter={true} />
-
-                    {/* Health score */}
-                    <td style={tds.metricCell}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <span style={{ color: healthDot(row.healthScore), fontSize: 8 }}>●</span>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: healthDot(row.healthScore) }}>
-                          {row.healthScore}
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* Badge */}
-                    <td style={tds.metricCell}>
-                      <span style={{
-                        fontSize: 10, fontWeight: 800, letterSpacing: 0.4,
-                        color: bm.color, background: bm.bg,
-                        borderRadius: 4, padding: '3px 7px',
-                      }}>
-                        {bm.label}
-                      </span>
-                    </td>
-
-                    {/* Toggle */}
-                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                      <ToggleBtn row={row} clientId={clientId} onDone={fetchData} />
-                    </td>
-                  </tr>
-                );
-              })}
+                  {/* Paused collapsible section */}
+                  {!collapsedGroups.has(group.key) && group.pausedRows.length > 0 && (
+                    <>
+                      <tr style={{ background: 'rgba(136,136,136,0.04)' }}>
+                        <td colSpan={13} style={{ padding: `5px 12px 5px ${group.label ? '28px' : '12px'}` }}>
+                          <button
+                            onClick={() => togglePaused(group.key)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-dim)', fontSize: 11 }}
+                          >
+                            <span style={{ fontSize: 9 }}>
+                              {autoExpandPaused || expandedPaused.has(group.key) ? '▼' : '▶'}
+                            </span>
+                            ⏸ Paused ({group.pausedRows.length})
+                          </button>
+                        </td>
+                      </tr>
+                      {(autoExpandPaused || expandedPaused.has(group.key)) && group.pausedRows.map(renderRow)}
+                    </>
+                  )}
+                </React.Fragment>
+              ))}
             </tbody>
           </table>
         )}
@@ -840,13 +1013,10 @@ export default function CompareMonitor() {
       )}
 
       {/* Modals */}
-      {showWeights && (
-        <WeightsModal onClose={() => setShowWeights(false)} onSaved={fetchData} />
-      )}
-      {showGuide && (
-        <ColourGuide onClose={() => setShowGuide(false)} />
-      )}
-      {editBudget && (
+      {infoRow     && <InfoModal row={infoRow} onClose={() => setInfoRow(null)} />}
+      {showWeights && <WeightsModal onClose={() => setShowWeights(false)} onSaved={fetchData} />}
+      {showGuide   && <ColourGuide onClose={() => setShowGuide(false)} />}
+      {editBudget  && (
         <BudgetEditModal row={editBudget} clientId={clientId}
           onClose={() => setEditBudget(null)} onSaved={() => { setEditBudget(null); fetchData(); }} />
       )}
@@ -883,23 +1053,23 @@ export default function CompareMonitor() {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Styles ─────────────────────────────────────────────────────────────────────
 
 const s = {
-  page:       { padding: '32px 36px', maxWidth: 1400 },
-  header:     { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 },
-  title:      { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
-  sub:        { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
-  controls:   { display: 'flex', alignItems: 'flex-end', gap: 20, padding: '14px 18px', borderRadius: 12, marginBottom: 14, flexWrap: 'wrap' },
+  page:         { padding: '32px 36px', maxWidth: 1400 },
+  header:       { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 },
+  title:        { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
+  sub:          { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
+  controls:     { display: 'flex', alignItems: 'flex-end', gap: 20, padding: '14px 18px', borderRadius: 12, marginBottom: 14, flexWrap: 'wrap' },
   controlGroup: { display: 'flex', flexDirection: 'column', gap: 5 },
   controlLabel: { fontSize: 10, fontWeight: 700, color: '#32cd32', letterSpacing: 1.2, textTransform: 'uppercase' },
-  controlSelect: { fontSize: 13, padding: '6px 10px', height: 34 },
-  chips:      { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
-  chip:       { padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none' },
-  filterRow:  { display: 'flex', gap: 8, padding: '10px 14px', borderRadius: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' },
-  bulkBar:    { display: 'flex', gap: 10, padding: '10px 14px', borderRadius: 10, marginBottom: 12, alignItems: 'center' },
-  tableWrap:  { overflow: 'hidden', marginBottom: 8 },
-  center:     { padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 },
+  controlSelect:{ fontSize: 13, padding: '6px 10px', height: 34 },
+  chips:        { display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
+  chip:         { padding: '5px 12px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none' },
+  filterRow:    { display: 'flex', gap: 8, padding: '10px 14px', borderRadius: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' },
+  bulkBar:      { display: 'flex', gap: 10, padding: '10px 14px', borderRadius: 10, marginBottom: 12, alignItems: 'center' },
+  tableWrap:    { overflow: 'hidden', marginBottom: 8 },
+  center:       { padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 },
 };
 
 const tds = {

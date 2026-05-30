@@ -2042,7 +2042,7 @@ app.get('/api/compare', async (req, res) => {
       const name = level === 'campaign' ? r.campaign_name : level === 'adset' ? r.adset_name : r.ad_name;
 
       let status = 'UNKNOWN', budget = null, objective = '', optGoal = '';
-      let parentId = null, parentName = null;
+      let parentId = null, parentName = null, info = null;
 
       if (level === 'campaign') {
         const cs = campMap[r.campaign_id] || {};
@@ -2050,6 +2050,7 @@ app.get('/api/compare', async (req, res) => {
         const db = parseBudget(cs.daily_budget), lb = parseBudget(cs.lifetime_budget);
         budget = db ? { type: 'daily', amount: db } : lb ? { type: 'lifetime', amount: lb } : null;
         objective = cs.objective || '';
+        info = { objective: cs.objective || '' };
       } else if (level === 'adset') {
         const as = adsetMap[r.adset_id] || {};
         status = as.effective_status || 'UNKNOWN';
@@ -2058,6 +2059,11 @@ app.get('/api/compare', async (req, res) => {
         optGoal = as.optimization_goal || '';
         parentId = r.campaign_id;
         parentName = r.campaign_name;
+        info = {
+          optimization_goal: as.optimization_goal || '',
+          billing_event: as.billing_event || '',
+          targeting: as.targeting || null,
+        };
       } else {
         const ad = adMapS[r.ad_id] || {};
         status = ad.effective_status || 'UNKNOWN';
@@ -2108,7 +2114,7 @@ app.get('/api/compare', async (req, res) => {
       );
 
       return {
-        id, name, status, budget, level,
+        id, name, status, budget, level, info,
         objective: objective || optGoal, parentId, parentName,
         curr: { ...curr, results, costPerResult },
         prev: prevM ? { ...prevM, results: prevResults, costPerResult: prevCostPerResult } : null,
