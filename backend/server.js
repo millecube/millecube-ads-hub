@@ -260,6 +260,105 @@ app.post('/api/auth/reset-password', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Telegram Integration ──────────────────────────────────────────────────────
+
+async function sendTelegram(text) {
+  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+  try {
+    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, {
+      chat_id: chatId, text, parse_mode: 'HTML',
+    });
+  } catch (err) {
+    console.error('[TELEGRAM] Send failed:', err.response?.data || err.message);
+  }
+}
+
+async function buildTelegramSummary(rangeLabel = 'today') {
+  const allClients = await readClients();
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const fmt = d => d.toISOString().slice(0, 10);
+  let dateStart, dateStop, label;
+  if (rangeLabel === 'yesterday') {
+    const y = new Date(now); y.setDate(y.getDate() - 1);
+    dateStart = dateStop = fmt(y); label = 'Yesterday';
+  } else if (rangeLabel === '7d') {
+    const s = new Date(now); s.setDate(s.getDate() - 6);
+    dateStart = fmt(s); dateStop = fmt(now); label = 'Last 7 Days';
+  } else {
+    dateStart = dateStop = fmt(now); label = 'Today';
+  }
+
+  const dateStr = dateStart === dateStop ? dateStart : `${dateStart} to ${dateStop}`;
+  const lines = [`📊 <b>Ads Summary — ${label}</b>\n📅 ${dateStr}\n`];
+
+  for (const client of allClients) {
+    try {
+      const rows = await fetchMetaInsights(client, dateStart, dateStop);
+      let spend = 0, impressions = 0, convos = 0;
+      for (const r of rows) {
+        spend       += parseFloat(r.spend || 0);
+        impressions += parseInt(r.impressions || 0);
+        const c = (r.actions || []).find(a => a.action_type === 'onsite_conversion.messaging_conversation_started_7d');
+        convos += c ? parseInt(c.value || 0) : 0;
+      }
+      const cpm  = impressions > 0 ? spend / impressions * 1000 : 0;
+      const icon = spend === 0 ? '⚫' : cpm < 8 ? '✅' : cpm < 15 ? '⚠️' : '🔴';
+      lines.push(`${icon} <b>${client.clientCode}</b> — Spend: RM ${spend.toFixed(0)} | CPM: RM ${cpm.toFixed(2)} | Convos: ${convos}`);
+    } catch {
+      lines.push(`❓ <b>${client.clientCode}</b> — No data`);
+    }
+  }
+
+  lines.push(`\n🔗 <a href="https://millecube-ads-hub.vercel.app">Open Dashboard</a>`);
+  return lines.join('\n');
+}
+
+// Telegram webhook — public (no auth needed)
+app.post('/telegram/webhook', async (req, res) => {
+  res.sendStatus(200);
+  const msg = req.body?.message;
+  if (!msg) return;
+  const chatId        = String(msg.chat?.id || '');
+  const allowedChatId = String(process.env.TELEGRAM_CHAT_ID || '');
+  if (chatId !== allowedChatId) return; // ignore unknown senders
+  const text = (msg.text || '').trim().toLowerCase();
+  try {
+    if (text.startsWith('/summary') || text === '/start') {
+      await sendTelegram(await buildTelegramSummary('today'));
+    } else if (text.startsWith('/yesterday')) {
+      await sendTelegram(await buildTelegramSummary('yesterday'));
+    } else if (text.startsWith('/7d')) {
+      await sendTelegram(await buildTelegramSummary('7d'));
+    } else if (text.startsWith('/help')) {
+      await sendTelegram([
+        '📋 <b>Millecube Ads Bot — Commands</b>',
+        '',
+        '/summary — Today\'s spend for all clients',
+        '/yesterday — Yesterday\'s summary',
+        '/7d — Last 7 days summary',
+        '/help — Show this message',
+      ].join('\n'));
+    }
+  } catch (err) {
+    console.error('[TELEGRAM WEBHOOK] Error:', err.message);
+    await sendTelegram('❌ Something went wrong. Check Render logs.');
+  }
+});
+
+async function registerTelegramWebhook() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  const url = `https://millecube-ads-hub.onrender.com/telegram/webhook`;
+  try {
+    await axios.post(`https://api.telegram.org/bot${token}/setWebhook`, { url });
+    console.log('[TELEGRAM] Webhook registered:', url);
+  } catch (err) {
+    console.error('[TELEGRAM] Webhook registration failed:', err.message);
+  }
+}
+
 // ── Protect all remaining /api routes ─────────────────────────────────────────
 app.use('/api', authMiddleware);
 
@@ -2674,8 +2773,20 @@ app.delete('/api/settings/logo', requireAdmin, async (req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
+// Daily Telegram summary — 9am MYT (01:00 UTC)
+cron.schedule('0 1 * * *', async () => {
+  console.log('[TELEGRAM CRON] Sending daily summary...');
+  try {
+    await sendTelegram(await buildTelegramSummary('today'));
+    console.log('[TELEGRAM CRON] Done');
+  } catch (err) {
+    console.error('[TELEGRAM CRON] Failed:', err.message);
+  }
+});
+
 app.listen(PORT, async () => {
   console.log(`\n🟢 Millecube Ads Hub Backend running on http://localhost:${PORT}`);
   try { await ensureDefaultUser(); } catch (e) { console.error('[AUTH] Failed to init user:', e.message); }
   try { await loadAllSchedules(); } catch (e) { console.error('[CRON] Failed to load schedules:', e.message); }
+  try { await registerTelegramWebhook(); } catch (e) { console.error('[TELEGRAM] Failed to register webhook:', e.message); }
 });
