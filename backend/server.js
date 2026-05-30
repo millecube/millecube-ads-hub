@@ -2209,7 +2209,7 @@ app.get('/api/compare/ad-creative/:adId', async (req, res) => {
     const r = await axios.get(`https://graph.facebook.com/v19.0/${req.params.adId}`, {
       params: {
         access_token: client.accessToken,
-        fields: 'creative{id,name,body,title,description,call_to_action_type,image_url,thumbnail_url,object_story_spec}',
+        fields: 'creative{id,name,body,title,call_to_action_type,image_url,thumbnail_url,object_story_spec}',
       },
     });
 
@@ -2219,7 +2219,7 @@ app.get('/api/compare/ad-creative/:adId', async (req, res) => {
     let mediaType = 'none', mediaUrl = null, thumbnailUrl = null;
     let headline    = creative.title       || null;
     let primaryText = creative.body        || null;
-    let description = creative.description || null;
+    let description = null;
     let ctaButton   = creative.call_to_action_type || null;
 
     if (spec.video_data) {
