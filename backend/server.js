@@ -1891,9 +1891,8 @@ app.post('/api/performance/toggle', async (req, res) => {
     if (!client) return res.status(404).json({ error: 'Client not found' });
     if (req.user.role !== 'admin' && !(Array.isArray(client.assignedUsers) && client.assignedUsers.includes(req.user.id)))
       return res.status(403).json({ error: 'Access denied' });
-    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, null, {
-      params: { access_token: client.accessToken, status }
-    });
+    const toggleBody = new URLSearchParams({ access_token: client.accessToken, status });
+    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, toggleBody);
     if (usingMongo()) {
       const db = await getDb();
       // Clear struct cache (holds effective_status) and compare perf cache for this client
@@ -2263,11 +2262,11 @@ app.patch('/api/compare/budget', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
 
     const amountCents = Math.round(parseFloat(budgetAmount) * 100);
-    const params = { access_token: client.accessToken };
-    if (budgetType === 'daily')    params.daily_budget    = amountCents;
-    else                           params.lifetime_budget = amountCents;
+    const budgetBody = new URLSearchParams({ access_token: client.accessToken });
+    if (budgetType === 'daily') budgetBody.set('daily_budget', String(amountCents));
+    else                        budgetBody.set('lifetime_budget', String(amountCents));
 
-    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, null, { params });
+    await axios.post(`https://graph.facebook.com/v22.0/${objectId}`, budgetBody);
 
     if (usingMongo()) {
       const db = await getDb();
