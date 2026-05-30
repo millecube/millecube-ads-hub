@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { useSidebar } from '../context/SidebarContext';
+import { useWindowWidth } from '../hooks/useWindowWidth';
 
 const SECTIONS = [
   {
@@ -55,6 +56,9 @@ export default function Sidebar() {
 
   const [expanded, setExpanded] = useState(() => getInitialExpanded(location.pathname));
 
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth < 768;
+
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const toggleSection = (id) => {
@@ -66,6 +70,9 @@ export default function Sidebar() {
   };
 
   const isActive = (to) => to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
+
+  // On mobile the sidebar is always full-width (never icon-only)
+  const isCollapsed = isMobile ? false : collapsed;
 
   return (
     <>
@@ -85,33 +92,43 @@ export default function Sidebar() {
       </AnimatePresence>
 
       <motion.aside
-        animate={{ width: collapsed ? 64 : 220 }}
+        initial={false}
+        animate={
+          isMobile
+            ? {
+                x: mobileOpen ? 0 : -230,
+                boxShadow: mobileOpen ? '6px 0 32px rgba(0,0,0,0.55)' : 'none',
+              }
+            : { width: collapsed ? 64 : 220, x: 0, boxShadow: 'none' }
+        }
         transition={{ duration: 0.28, ease: EASE }}
         style={st.sidebar}
-        className={`sidebar ${mobileOpen ? 'mobile-open' : ''}`}
+        className="sidebar"
       >
-        {/* Collapse toggle */}
-        <motion.button
-          onClick={toggle}
-          style={st.collapseBtn}
-          title={collapsed ? 'Expand' : 'Collapse'}
-          whileHover={{ scale: 1.15, boxShadow: '0 4px 14px rgba(50,205,50,0.5)' }}
-          whileTap={{ scale: 0.88 }}
-          transition={{ duration: 0.15 }}
-        >
-          <motion.span
-            animate={{ rotate: collapsed ? 180 : 0 }}
-            transition={{ duration: 0.28, ease: EASE }}
-            style={{ display: 'inline-block', lineHeight: 1 }}
+        {/* Collapse toggle — desktop only */}
+        {!isMobile && (
+          <motion.button
+            onClick={toggle}
+            style={st.collapseBtn}
+            title={collapsed ? 'Expand' : 'Collapse'}
+            whileHover={{ scale: 1.15, boxShadow: '0 4px 14px rgba(50,205,50,0.5)' }}
+            whileTap={{ scale: 0.88 }}
+            transition={{ duration: 0.15 }}
           >
-            ‹
-          </motion.span>
-        </motion.button>
+            <motion.span
+              animate={{ rotate: collapsed ? 180 : 0 }}
+              transition={{ duration: 0.28, ease: EASE }}
+              style={{ display: 'inline-block', lineHeight: 1 }}
+            >
+              ‹
+            </motion.span>
+          </motion.button>
+        )}
 
         {/* Logo */}
         <div style={st.logoWrap}>
           <AnimatePresence mode="wait" initial={false}>
-            {collapsed ? (
+            {isCollapsed ? (
               <motion.img
                 key="logo-sm"
                 src="/logo.png"
@@ -149,12 +166,12 @@ export default function Sidebar() {
                   key={sec.to}
                   to={sec.to}
                   onClick={closeMobile}
-                  title={collapsed ? sec.label : ''}
-                  style={{ ...st.navItem, justifyContent: collapsed ? 'center' : 'flex-start', ...(active ? st.navActive : {}) }}
+                  title={isCollapsed ? sec.label : ''}
+                  style={{ ...st.navItem, justifyContent: isCollapsed ? 'center' : 'flex-start', ...(active ? st.navActive : {}) }}
                 >
                   <span style={{ ...st.navIcon, ...(active ? st.navIconActive : {}) }}>{sec.icon}</span>
                   <AnimatePresence initial={false}>
-                    {!collapsed && (
+                    {!isCollapsed && (
                       <motion.span
                         initial={{ opacity: 0, x: -6 }}
                         animate={{ opacity: 1, x: 0, transition: { delay: 0.06, duration: 0.16 } }}
@@ -165,7 +182,7 @@ export default function Sidebar() {
                       </motion.span>
                     )}
                   </AnimatePresence>
-                  {active && !collapsed && <div style={st.activeBar} />}
+                  {active && !isCollapsed && <div style={st.activeBar} />}
                 </NavLink>
               );
             }
@@ -175,7 +192,7 @@ export default function Sidebar() {
 
             return (
               <div key={sec.id}>
-                {!collapsed ? (
+                {!isCollapsed ? (
                   <motion.button
                     onClick={() => toggleSection(sec.id)}
                     style={{ ...st.sectionHeader, ...(sectionActive ? st.sectionHeaderActive : {}) }}
@@ -202,7 +219,7 @@ export default function Sidebar() {
 
                 {/* Expanded children (animated) */}
                 <AnimatePresence initial={false}>
-                  {!collapsed && isOpen && (
+                  {!isCollapsed && isOpen && (
                     <motion.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
@@ -241,7 +258,7 @@ export default function Sidebar() {
                 </AnimatePresence>
 
                 {/* Collapsed children: icons only */}
-                {collapsed && sec.children.map(child => {
+                {isCollapsed && sec.children.map(child => {
                   const active = isActive(child.to);
                   return (
                     <NavLink
@@ -266,15 +283,15 @@ export default function Sidebar() {
         <div style={{ padding: '4px 10px' }}>
           <motion.button
             onClick={toggleTheme}
-            style={{ ...st.themeBtn, justifyContent: collapsed ? 'center' : undefined, padding: collapsed ? '9px 0' : undefined }}
+            style={{ ...st.themeBtn, justifyContent: isCollapsed ? 'center' : undefined, padding: isCollapsed ? '9px 0' : undefined }}
             whileHover={{ borderColor: 'rgba(50,205,50,0.45)', backgroundColor: 'rgba(50,205,50,0.07)' }}
             whileTap={{ scale: 0.96 }}
             transition={{ duration: 0.15 }}
-            title={collapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : ''}
+            title={isCollapsed ? (theme === 'dark' ? 'Light Mode' : 'Dark Mode') : ''}
           >
             <span>{theme === 'dark' ? '☀️' : '🌙'}</span>
             <AnimatePresence initial={false}>
-              {!collapsed && (
+              {!isCollapsed && (
                 <motion.span
                   initial={{ opacity: 0, width: 0 }}
                   animate={{ opacity: 1, width: 'auto', transition: { delay: 0.06, duration: 0.16 } }}
@@ -290,11 +307,11 @@ export default function Sidebar() {
 
         {/* User + logout */}
         {user && (
-          <div style={{ ...st.userWrap, justifyContent: collapsed ? 'center' : 'space-between' }}>
+          <div style={{ ...st.userWrap, justifyContent: isCollapsed ? 'center' : 'space-between' }}>
             <div style={st.userInfo}>
               <div style={st.userAvatar}>{user.username?.[0]?.toUpperCase()}</div>
               <AnimatePresence initial={false}>
-                {!collapsed && (
+                {!isCollapsed && (
                   <motion.div
                     initial={{ opacity: 0, x: -8 }}
                     animate={{ opacity: 1, x: 0, transition: { delay: 0.06, duration: 0.16 } }}
@@ -307,7 +324,7 @@ export default function Sidebar() {
               </AnimatePresence>
             </div>
             <AnimatePresence initial={false}>
-              {!collapsed && (
+              {!isCollapsed && (
                 <motion.button
                   initial={{ opacity: 0, scale: 0.7 }}
                   animate={{ opacity: 1, scale: 1, transition: { delay: 0.1, duration: 0.16 } }}
@@ -327,7 +344,7 @@ export default function Sidebar() {
 
         {/* Footer */}
         <AnimatePresence initial={false}>
-          {!collapsed && (
+          {!isCollapsed && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1, transition: { delay: 0.1, duration: 0.2 } }}

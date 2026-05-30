@@ -229,8 +229,8 @@ export default function Settings() {
   };
 
   return (
-    <div style={s.page} className="fade-up">
-      <div style={s.header}>
+    <div style={s.page} className="page-wrap fade-up">
+      <div style={s.header} className="page-header">
         <div>
           <h1 style={s.title}>Settings</h1>
           <p style={s.sub}>Manage your account and preferences</p>
@@ -346,7 +346,7 @@ export default function Settings() {
             {/* Add user form */}
             {showAddUser && (
               <form onSubmit={handleAddUser} style={s.addForm}>
-                <div style={s.addGrid}>
+                <div style={s.addGrid} className="modal-2col">
                   <div style={s.field}>
                     <label style={s.label}>Username *</label>
                     <input className="form-input" value={newUser.username} onChange={e => setNewUser(p => ({ ...p, username: e.target.value }))} required />
@@ -593,7 +593,7 @@ const as = {
   },
   clientGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
     gap: 10, marginBottom: 18
   },
   clientChip: {

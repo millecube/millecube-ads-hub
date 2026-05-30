@@ -95,7 +95,7 @@ function ClientModal({ client, onClose, onSaved, isAdmin }) {
           {/* Basic Info */}
           <div style={ms.section}>
             <div style={ms.sectionLabel}>Client Info</div>
-            <div style={ms.row2}>
+            <div style={ms.row2} className="modal-2col">
               <div className="form-group">
                 <label className="form-label">Client Code *</label>
                 <input className="form-input" placeholder="e.g. VF, PF, MJ"
@@ -149,7 +149,7 @@ function ClientModal({ client, onClose, onSaved, isAdmin }) {
           {/* Chart Colours */}
           <div style={ms.section}>
             <div style={ms.sectionLabel}>Report Chart Colours</div>
-            <div style={ms.row2}>
+            <div style={ms.row2} className="modal-2col">
               <div className="form-group">
                 <label className="form-label">Primary Colour</label>
                 <div style={ms.colorRow}>
@@ -223,8 +223,8 @@ export default function Clients() {
   const onSaved = () => { setModal(null); load(); };
 
   return (
-    <div style={s.page} className="fade-up">
-      <div style={s.header}>
+    <div style={s.page} className="page-wrap fade-up">
+      <div style={s.header} className="page-header">
         <div>
           <h1 style={s.title}>Clients</h1>
           <p style={s.sub}>Onboard and manage Meta Ads accounts</p>
@@ -232,7 +232,7 @@ export default function Clients() {
         <button className="btn btn-primary" onClick={() => setModal('new')}>+ Onboard Client</button>
       </div>
 
-      <div className="glass" style={s.tableWrap}>
+      <div className="glass table-scroll-wrap" style={s.tableWrap}>
         {loading ? (
           <div style={s.loading}><div className="spinner" /></div>
         ) : clients.length === 0 ? (

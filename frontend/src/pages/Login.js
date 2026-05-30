@@ -61,7 +61,7 @@ export default function Login() {
         {theme === 'dark' ? '☀️' : '🌙'}
       </button>
 
-      <div style={s.card} className="glass">
+      <div style={s.card} className="glass login-card">
         <div style={s.logoWrap}>
           <img src="/logo.png" alt="Millecube" style={s.logo} />
         </div>
@@ -191,7 +191,7 @@ const s = {
     textAlign: 'center',
   },
   logoWrap: { marginBottom: 16 },
-  logo: { width: 160, height: 'auto' },
+  logo: { width: '100%', maxWidth: 160, height: 'auto' },
   title: { fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', margin: '8px 0 4px', fontFamily: 'Montserrat, sans-serif' },
   sub:   { fontSize: 13, color: 'var(--text-muted)', margin: 0 },
   field: { marginBottom: 16, textAlign: 'left' },

@@ -35,11 +35,11 @@ export default function Dashboard() {
   ];
 
   return (
-    <div style={styles.page} className="fade-up">
-      <div style={styles.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+    <div style={styles.page} className="page-wrap fade-up">
+      <div style={styles.header} className="page-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
           {logo && (
-            <img src={logo} alt="logo" style={{ maxHeight: 56, maxWidth: 160, objectFit: 'contain', borderRadius: 6 }} />
+            <img src={logo} alt="logo" style={{ maxHeight: 48, maxWidth: 140, objectFit: 'contain', borderRadius: 6 }} />
           )}
           <div>
             <h1 style={styles.title}>Dashboard</h1>
@@ -53,11 +53,11 @@ export default function Dashboard() {
       </div>
 
       {/* KPI Row */}
-      <div style={styles.kpiGrid}>
+      <div style={styles.kpiGrid} className="kpi-grid">
         {kpis.map(k => (
           <div key={k.label} className="glass stat-card" style={styles.kpiCard}>
             <div style={{ ...styles.kpiIcon, color: k.danger ? '#ff4d4d' : '#32cd32' }}>{k.icon}</div>
-            <div style={{ ...styles.kpiValue, color: k.danger ? 'var(--danger)' : 'var(--text-primary)' }}>{loading ? '—' : k.value}</div>
+            <div className="kpi-val" style={{ ...styles.kpiValue, color: k.danger ? 'var(--danger)' : 'var(--text-primary)' }}>{loading ? '—' : k.value}</div>
             <div style={styles.kpiLabel}>{k.label}</div>
             <div style={styles.kpiSub}>{k.sub}</div>
           </div>
@@ -70,7 +70,7 @@ export default function Dashboard() {
           <h2 style={styles.sectionTitle}>Recent Report Jobs</h2>
           <span className="badge badge-dim">{jobs.length} jobs</span>
         </div>
-        <div className="glass" style={styles.tableWrap}>
+        <div className="glass table-scroll-wrap" style={styles.tableWrap}>
           {loading ? (
             <div style={styles.loading}><div className="spinner" /></div>
           ) : jobs.length === 0 ? (
@@ -139,7 +139,7 @@ export default function Dashboard() {
         <div style={styles.sectionHeader}>
           <h2 style={styles.sectionTitle}>Connected Clients</h2>
         </div>
-        <div style={styles.clientGrid}>
+        <div style={styles.clientGrid} className="client-grid">
           {clients.map(c => (
             <div key={c.id} className="glass" style={styles.clientCard}>
               <div style={styles.clientCodeBadge}>{c.clientCode}</div>
@@ -169,7 +169,7 @@ const styles = {
   page: { padding: '32px 36px', maxWidth: 1100 },
   header: {
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-    marginBottom: 32
+    flexWrap: 'wrap', gap: 12, marginBottom: 28
   },
   title: { fontSize: 28, fontWeight: 800, color: 'var(--text-primary)', letterSpacing: -0.5 },
   sub: { fontSize: 13, color: 'var(--text-muted)', marginTop: 4 },
@@ -192,7 +192,7 @@ const styles = {
   section: { marginBottom: 32 },
   sectionHeader: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 },
   sectionTitle: { fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' },
-  tableWrap: { overflow: 'hidden' },
+  tableWrap: { overflowX: 'auto' },
   loading: { padding: 40, display: 'flex', justifyContent: 'center' },
   empty: {
     padding: 48, textAlign: 'center',

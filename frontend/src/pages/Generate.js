@@ -94,15 +94,15 @@ export default function Generate() {
   const { dateStart, dateStop, label } = getRange();
 
   return (
-    <div style={s.page} className="fade-up">
-      <div style={s.header}>
+    <div style={s.page} className="page-wrap fade-up">
+      <div style={s.header} className="page-header">
         <div>
           <h1 style={s.title}>Generate Report</h1>
           <p style={s.sub}>Pull Meta Ads data and produce a Word report for one or more clients</p>
         </div>
       </div>
 
-      <div style={s.grid}>
+      <div style={s.grid} className="gen-grid">
         {/* Left — Config */}
         <div style={s.left}>
 
@@ -178,7 +178,7 @@ export default function Generate() {
                 </select>
               </div>
             ) : (
-              <div style={s.customRange}>
+              <div style={s.customRange} className="modal-2col">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Start Date</label>
                   <input type="date" className="form-input" value={customStart} onChange={e => setCustomStart(e.target.value)} />
