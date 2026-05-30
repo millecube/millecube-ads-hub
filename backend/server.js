@@ -262,6 +262,8 @@ app.post('/api/auth/reset-password', async (req, res) => {
 
 // ── Telegram Integration ──────────────────────────────────────────────────────
 
+const telegramPending = {}; // chatId -> { suggestions: [], awaitingConfirm: null }
+
 async function sendTelegram(text) {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -273,6 +275,10 @@ async function sendTelegram(text) {
   } catch (err) {
     console.error('[TELEGRAM] Send failed:', err.response?.data || err.message);
   }
+}
+
+function badgeIcon(badge) {
+  return badge === 'PAUSE' ? '🔴' : badge === 'REFRESH' ? '🔄' : badge === 'WATCH' ? '⚠️' : badge === 'SCALE' ? '🚀' : '✅';
 }
 
 async function buildTelegramSummary(rangeLabel = 'today') {
@@ -289,10 +295,8 @@ async function buildTelegramSummary(rangeLabel = 'today') {
   } else {
     dateStart = dateStop = fmt(now); label = 'Today';
   }
-
   const dateStr = dateStart === dateStop ? dateStart : `${dateStart} to ${dateStop}`;
   const lines = [`📊 <b>Ads Summary — ${label}</b>\n📅 ${dateStr}\n`];
-
   for (const client of allClients) {
     try {
       const rows = await fetchPerfCampaignLevel(client, dateStart, dateStop);
@@ -310,9 +314,120 @@ async function buildTelegramSummary(rangeLabel = 'today') {
       lines.push(`❓ <b>${client.clientCode}</b> — No data (${err.response?.data?.error?.message || err.message})`);
     }
   }
-
   lines.push(`\n🔗 <a href="https://millecube-ads-hub.vercel.app">Open Dashboard</a>`);
   return lines.join('\n');
+}
+
+async function buildDetailedReport() {
+  const allClients = await readClients();
+
+  let globalDef = { weights: WEIGHT_DEFAULTS, deltaThresholds: DELTA_DEFAULTS, baseThresholds: BASE_DEFAULTS };
+  if (usingMongo()) {
+    try {
+      const db = await getDb();
+      const gdoc = await db.collection('settings').findOne({ _id: 'compareGlobalDefaults' });
+      if (gdoc) globalDef = { weights: gdoc.weights || WEIGHT_DEFAULTS, deltaThresholds: gdoc.deltaThresholds || DELTA_DEFAULTS, baseThresholds: gdoc.baseThresholds || BASE_DEFAULTS };
+    } catch {}
+  }
+
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const fmt = d => d.toISOString().slice(0, 10);
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const weekStart = new Date(yesterday); weekStart.setDate(weekStart.getDate() - 6);
+  const prevEnd   = new Date(weekStart); prevEnd.setDate(prevEnd.getDate() - 1);
+  const prevStart = new Date(prevEnd);   prevStart.setDate(prevStart.getDate() - 6);
+  const currStart = fmt(weekStart), currEnd = fmt(yesterday);
+  const prevStartStr = fmt(prevStart), prevEndStr = fmt(prevEnd);
+
+  const allSuggestions = [];
+  const clientMessages = [];
+
+  for (const client of allClients) {
+    try {
+      const [currRows, prevRows, adsetStruct, campStruct] = await Promise.all([
+        fetchPerfAdsetLevel(client, currStart, currEnd),
+        fetchPerfAdsetLevel(client, prevStartStr, prevEndStr).catch(() => []),
+        fetchAdsetStructure(client).catch(() => []),
+        fetchCampaignStructure(client).catch(() => []),
+      ]);
+
+      const prevMap = {};
+      prevRows.forEach(r => { prevMap[r.adset_id] = r; });
+      const adsetStructMap = {};
+      adsetStruct.forEach(a => { adsetStructMap[a.id] = a; });
+      const campStructMap = {};
+      campStruct.forEach(c => { campStructMap[c.id] = c; });
+
+      const weights = client.compareWeights || globalDef.weights;
+      const dt      = client.compareDeltaThresholds || globalDef.deltaThresholds;
+      const bt      = client.compareBaseThresholds  || globalDef.baseThresholds;
+
+      const campMap = {};
+      let clientSpend = 0;
+
+      for (const r of currRows) {
+        const struct    = adsetStructMap[r.adset_id] || {};
+        const optGoal   = struct.optimization_goal || '';
+        const objective = (campStructMap[r.campaign_id] || {}).objective || '';
+        const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+
+        const spend = parseFloat(r.spend || 0);
+        const ctr   = parseFloat(r.ctr || 0);
+        const cpm   = parseFloat(r.cpm || 0);
+        const freq  = parseFloat(r.frequency || 0);
+        let results = 0, costPerResult = 0;
+        if (actionType) {
+          const cpa = extractCostPerAction(r.cost_per_unique_action_type, actionType) ||
+                      extractCostPerAction(r.cost_per_action_type, actionType);
+          results       = cpa > 0 ? Math.round(spend / cpa) : extractAction(r.actions, actionType);
+          costPerResult = cpa || (results > 0 ? spend / results : 0);
+        }
+        const curr = { spend, impressions: parseInt(r.impressions || 0), ctr, cpm, frequency: freq, results, costPerResult };
+
+        const prevRow = prevMap[r.adset_id];
+        let prevM = null;
+        if (prevRow) {
+          const pSpend = parseFloat(prevRow.spend || 0);
+          let pResults = 0, pCpr = 0;
+          if (actionType) {
+            const pCpa = extractCostPerAction(prevRow.cost_per_unique_action_type, actionType) ||
+                         extractCostPerAction(prevRow.cost_per_action_type, actionType);
+            pResults = pCpa > 0 ? Math.round(pSpend / pCpa) : extractAction(prevRow.actions, actionType);
+            pCpr     = pCpa || (pResults > 0 ? pSpend / pResults : 0);
+          }
+          prevM = { spend: pSpend, impressions: parseInt(prevRow.impressions || 0), ctr: parseFloat(prevRow.ctr || 0), cpm: parseFloat(prevRow.cpm || 0), frequency: parseFloat(prevRow.frequency || 0), results: pResults, costPerResult: pCpr };
+        }
+
+        const { healthScore, badge } = computeCompareHealth(curr, prevM, dt, weights, bt);
+        clientSpend += spend;
+
+        if (!campMap[r.campaign_id]) campMap[r.campaign_id] = { name: r.campaign_name, adsets: [] };
+        campMap[r.campaign_id].adsets.push({ id: r.adset_id, name: r.adset_name, status: struct.effective_status || 'UNKNOWN', clientId: client.id, clientCode: client.clientCode, campaignName: r.campaign_name, campaignId: r.campaign_id, spend, results, costPerResult, ctr, cpm, frequency: freq, healthScore, badge });
+
+        if (badge === 'PAUSE' || badge === 'REFRESH') {
+          allSuggestions.push({ num: allSuggestions.length + 1, badge, adsetId: r.adset_id, adsetName: r.adset_name, clientId: client.id, clientCode: client.clientCode, campaignName: r.campaign_name, campaignId: r.campaign_id, healthScore, spend, cpm, frequency: freq, ctr });
+        }
+      }
+
+      const lines = [`🏢 <b>${client.clientCode}</b> — ${client.name}`, `📅 ${currStart} → ${currEnd} | Total: RM ${clientSpend.toFixed(0)}`, ''];
+      for (const camp of Object.values(campMap)) {
+        lines.push(`📁 <b>${camp.name}</b>`);
+        for (const as of camp.adsets) {
+          const bi  = badgeIcon(as.badge);
+          const dot = as.status === 'ACTIVE' ? '🟢' : '⚫';
+          const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—/R';
+          lines.push(`  ${dot} ${as.name}`);
+          lines.push(`     💰RM${as.spend.toFixed(0)} | 🎯${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b>`);
+        }
+        lines.push('');
+      }
+      clientMessages.push(lines.join('\n'));
+    } catch (err) {
+      clientMessages.push(`🏢 <b>${client.clientCode}</b> — ❌ ${err.response?.data?.error?.message || err.message}`);
+    }
+  }
+
+  return { clientMessages, allSuggestions, currStart, currEnd };
 }
 
 // Telegram webhook — public (no auth needed)
@@ -322,25 +437,115 @@ app.post('/telegram/webhook', async (req, res) => {
   if (!msg) return;
   const chatId        = String(msg.chat?.id || '');
   const allowedChatId = String(process.env.TELEGRAM_CHAT_ID || '');
-  if (chatId !== allowedChatId) return; // ignore unknown senders
-  const text = (msg.text || '').trim().toLowerCase();
+  if (chatId !== allowedChatId) return;
+
+  const text = (msg.text || '').trim();
+  const cmd  = text.toLowerCase();
+
+  if (!telegramPending[chatId]) telegramPending[chatId] = { suggestions: [], awaitingConfirm: null };
+  const session = telegramPending[chatId];
+
   try {
-    if (text.startsWith('/summary') || text === '/start') {
+    // ── Awaiting yes/no confirmation ──
+    if (session.awaitingConfirm) {
+      const action = session.awaitingConfirm;
+      if (cmd === '/yes' || cmd === 'yes') {
+        session.awaitingConfirm = null;
+        await sendTelegram(`⏳ Pausing "${action.adsetName}"…`);
+        try {
+          const allClients = await readClients();
+          const client = allClients.find(c => c.id === action.clientId);
+          if (!client) throw new Error('Client not found');
+          const body = new URLSearchParams({ access_token: client.accessToken, status: 'PAUSED' });
+          await axios.post(`https://graph.facebook.com/v22.0/${action.adsetId}`, body);
+          if (usingMongo()) {
+            const db = await getDb();
+            await db.collection('monitorCache').deleteMany({ clientId: client.id, rangeKey: { $regex: '^(compare_v2_|struct_v2_|perf_)' } });
+          }
+          await sendTelegram(`✅ Paused: <b>${action.adsetName}</b>\nClient: ${action.clientCode} | Campaign: ${action.campaignName}`);
+        } catch (err) {
+          const metaErr = err.response?.data?.error;
+          await sendTelegram(`❌ Failed: ${metaErr ? metaErr.message : err.message}`);
+        }
+      } else if (cmd === '/no' || cmd === 'no') {
+        session.awaitingConfirm = null;
+        await sendTelegram(`↩️ Cancelled. No changes made.`);
+      } else {
+        await sendTelegram(`Reply /yes to confirm or /no to cancel.`);
+      }
+      return;
+    }
+
+    // ── /report ──
+    if (cmd.startsWith('/report')) {
+      await sendTelegram('⏳ Fetching 7-day report with health scores… this may take 20–30 seconds.');
+      const { clientMessages, allSuggestions, currStart, currEnd } = await buildDetailedReport();
+      session.suggestions = allSuggestions;
+
+      for (const msg of clientMessages) await sendTelegram(msg);
+
+      if (allSuggestions.length === 0) {
+        await sendTelegram('✅ No issues found. All ad sets are healthy!');
+      } else {
+        const lines = [`⚡ <b>${allSuggestions.length} Suggestion(s)</b>`, ''];
+        for (const s of allSuggestions) {
+          lines.push(`[${s.num}] ${badgeIcon(s.badge)} <b>${s.badge}</b> "${s.adsetName}" (${s.clientCode})`);
+          lines.push(`     Score: ${s.healthScore} | CPM: RM${s.cpm.toFixed(0)} | Freq: ${s.frequency.toFixed(1)} | CTR: ${s.ctr.toFixed(1)}%`);
+          lines.push(`     Campaign: ${s.campaignName}`);
+          lines.push('');
+        }
+        lines.push(`Type /pause [number] to act on a suggestion.`);
+        lines.push(`Example: /pause 1`);
+        await sendTelegram(lines.join('\n'));
+      }
+
+    // ── /pause N ──
+    } else if (cmd.startsWith('/pause ')) {
+      const num = parseInt(cmd.replace('/pause ', '').trim());
+      const action = session.suggestions.find(s => s.num === num);
+      if (!action) {
+        await sendTelegram(`❓ No suggestion #${num} found. Run /report first to load suggestions.`);
+      } else {
+        session.awaitingConfirm = action;
+        await sendTelegram([
+          `⚠️ <b>Confirm: Pause this ad set?</b>`,
+          ``,
+          `Ad Set: ${action.adsetName}`,
+          `Client: ${action.clientCode}`,
+          `Campaign: ${action.campaignName}`,
+          `Score: ${action.healthScore} | CPM: RM${action.cpm.toFixed(0)} | Freq: ${action.frequency.toFixed(1)}`,
+          ``,
+          `Reply /yes to confirm or /no to cancel.`,
+          `⚠️ This will pause the ad set immediately.`,
+        ].join('\n'));
+      }
+
+    // ── /summary ──
+    } else if (cmd.startsWith('/summary') || cmd === '/start') {
       await sendTelegram(await buildTelegramSummary('today'));
-    } else if (text.startsWith('/yesterday')) {
+
+    // ── /yesterday ──
+    } else if (cmd.startsWith('/yesterday')) {
       await sendTelegram(await buildTelegramSummary('yesterday'));
-    } else if (text.startsWith('/7d')) {
+
+    // ── /7d ──
+    } else if (cmd.startsWith('/7d')) {
       await sendTelegram(await buildTelegramSummary('7d'));
-    } else if (text.startsWith('/help')) {
+
+    // ── /help ──
+    } else if (cmd.startsWith('/help')) {
       await sendTelegram([
         '📋 <b>Millecube Ads Bot — Commands</b>',
         '',
         '/summary — Today\'s spend for all clients',
         '/yesterday — Yesterday\'s summary',
         '/7d — Last 7 days summary',
+        '/report — Full 7-day report with health scores + suggestions',
+        '/pause [N] — Pause suggested ad set (requires /yes confirmation)',
         '/help — Show this message',
       ].join('\n'));
     }
+
   } catch (err) {
     console.error('[TELEGRAM WEBHOOK] Error:', err.message);
     await sendTelegram('❌ Something went wrong. Check Render logs.');
