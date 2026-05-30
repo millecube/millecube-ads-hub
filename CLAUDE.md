@@ -16,6 +16,7 @@ Core features: generate Word reports, monitor live ad performance, track budgets
 | Auth | JWT (7d expiry), roles: admin / member | — |
 | Email | Resend API | RESEND_API_KEY on Render |
 | Storage | Google Drive (personal Gmail OAuth) | GOOGLE_* env vars on Render |
+| Telegram | Bot API (BotFather) | @Millecube_ads_hubbot |
 | Code | GitHub | github.com/millecube/millecube-ads-hub |
 | Deploy | Push to main → auto-deploy | Vercel (frontend) + Render (backend) |
 
@@ -41,6 +42,7 @@ Core features: generate Word reports, monitor live ad performance, track budgets
 | `/` | Dashboard | Protected |
 | `/monitor` | Analytic (Ads Monitor) | Protected |
 | `/performance` | Performance Table | Protected |
+| `/compare` | Compare Monitor (adset health scoring) | Protected |
 | `/budget` | Budget Manager | Protected |
 | `/clients` | Client Management | Protected |
 | `/generate` | Manual Report Generation | Protected |
@@ -149,6 +151,23 @@ Resend domain NOT verified yet. All auth emails route to `hello@millecube.com` (
 - `PUT /api/schedules/:id`
 - `DELETE /api/schedules/:id`
 
+### Compare Monitor
+- `GET /api/compare` — adset-level comparison (curr vs prev 7-day) with health scores + badges
+- `GET /api/compare/settings` — per-client weight/threshold settings
+- `PUT /api/compare/settings/:clientId` — save per-client settings
+- `PATCH /api/compare/budget` — inline budget edit
+- `GET /api/compare/ad-creative/:adId` — fetch ad creative preview
+- `GET /api/compare/defaults` — global default weights/thresholds
+- `PUT /api/compare/defaults` — save global defaults
+
+### Preferences / Settings
+- `GET /api/preferences` / `PUT /api/preferences` — user column/display prefs
+- `GET /api/settings` / `GET /api/settings/public` — app settings (logo etc.)
+- `POST /api/settings/logo` / `DELETE /api/settings/logo`
+
+### Telegram (public — not under /api, no auth)
+- `POST /telegram/webhook` — receives all Telegram bot messages and inline button taps
+
 ### Other
 - `GET /api/health` — public, used by UptimeRobot
 
@@ -205,7 +224,7 @@ On/Off, Status, Budget, Spend, Impressions, Reach, Freq, CPM, Link Clicks, CTR (
 ---
 
 ## Meta API Notes
-- Graph API v19.0
+- Graph API v22.0 (upgraded from v19.0 which is deprecated — all 17 references updated)
 - All insights fetched from `/{adAccountId}/insights`
 - Structure (status/budget) fetched from `/{adAccountId}/campaigns`, `/adsets`, `/ads`
 - Budget returned in **minor currency units** (sen for MYR) — divide by 100 for RM
@@ -233,6 +252,7 @@ On/Off, Status, Budget, Spend, Impressions, Reach, Freq, CPM, Link Clicks, CTR (
 ## Cron Jobs (server-side)
 - Auto-schedule reports: runs per schedule config in MongoDB
 - Budget reminder: weekly email if any client budget unconfirmed
+- Telegram daily summary: `0 1 * * *` (01:00 UTC = 09:00 MYT) — sends today's spend summary for all clients to bot chat
 
 ---
 
@@ -249,8 +269,20 @@ On/Off, Status, Budget, Spend, Impressions, Reach, Freq, CPM, Link Clicks, CTR (
 
 ---
 
+## Telegram Bot (`@Millecube_ads_hubbot`)
+- Bot token: `TELEGRAM_BOT_TOKEN` env var on Render
+- Allowed chat ID: `TELEGRAM_CHAT_ID` env var (937477704 — Zack's personal chat)
+- Webhook: `POST /telegram/webhook` (public, no auth) — registered on server start via `registerTelegramWebhook()`
+- Persistent tap-able keyboard (shown after `/start`): Today Summary / Yesterday / Last 7 Days / Full Report / Help
+- Commands: `/summary`, `/yesterday`, `/7d`, `/report`, `/pause [N]`, `/help`
+- `/report` builds 7-day adset-level health report using `buildDetailedReport()` — same scoring as Compare Monitor
+- `/pause N` shows inline Yes/Cancel buttons; tapping "✅ Yes, Pause" sends `callback_query` → pauses adset via Meta API
+- In-memory session store: `telegramPending[chatId]` — holds `suggestions[]` for `/pause N` lookup (cleared on server restart)
+- `escapeHtml()` applied to all dynamic content in HTML messages to prevent Telegram parse errors
+
+---
+
 ## Roadmap (not yet built)
-- **Phase 3** — Rule Engine: per-client thresholds, objective types (whatsapp/lead/shopee/engagement), feeds health score
 - **Phase 4** — Action escalation emails via Resend when team marks "escalate"
 - **Phase 6** — Google Sheets Sync: add Sheets API scope to existing Google OAuth
 - **Client portal** — read-only client login view (future)
