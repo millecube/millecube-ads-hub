@@ -919,10 +919,17 @@ app.post('/api/clients/:id/verify', async (req, res) => {
     const db = await getDb();
     const client = await db.collection('clients').findOne({ id: req.params.id });
     if (!client) return res.status(404).json({ error: 'Client not found' });
-    const response = await axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}`, {
-      params: { access_token: client.accessToken, fields: 'name,account_status,currency' }
-    });
-    res.json({ ok: true, account: response.data });
+    const [accountRes, debugRes] = await Promise.all([
+      axios.get(`https://graph.facebook.com/v22.0/${client.adAccountId}`, {
+        params: { access_token: client.accessToken, fields: 'name,account_status,currency' }
+      }),
+      axios.get('https://graph.facebook.com/debug_token', {
+        params: { input_token: client.accessToken, access_token: client.accessToken }
+      }).catch(() => null),
+    ]);
+    const scopes = debugRes?.data?.data?.scopes || [];
+    const hasAdsManagement = scopes.includes('ads_management');
+    res.json({ ok: true, account: accountRes.data, scopes, hasAdsManagement });
   } catch (err) {
     res.json({ ok: false, error: err.response?.data?.error?.message || err.message });
   }

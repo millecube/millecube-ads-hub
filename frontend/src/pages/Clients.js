@@ -137,10 +137,16 @@ function ClientModal({ client, onClose, onSaved, isAdmin }) {
                   {verifying ? <><div className="spinner" style={{ width: 13, height: 13 }} /> Verifying…</> : '⚡ Verify Connection'}
                 </button>
                 {verifyResult && (
-                  <span style={{ marginLeft: 12, fontSize: 12,
-                    color: verifyResult.ok ? '#32cd32' : '#ff4d4d' }}>
-                    {verifyResult.ok ? `✓ ${verifyResult.account?.name} (${verifyResult.account?.currency})` : `✕ ${verifyResult.error}`}
-                  </span>
+                  <div style={{ marginLeft: 12, fontSize: 12, display: 'inline-block' }}>
+                    <span style={{ color: verifyResult.ok ? '#32cd32' : '#ff4d4d' }}>
+                      {verifyResult.ok ? `✓ ${verifyResult.account?.name} (${verifyResult.account?.currency})` : `✕ ${verifyResult.error}`}
+                    </span>
+                    {verifyResult.ok && (
+                      <span style={{ marginLeft: 10, color: verifyResult.hasAdsManagement ? '#32cd32' : '#ff9900' }}>
+                        {verifyResult.hasAdsManagement ? '✓ ads_management (toggle/budget enabled)' : '⚠ NO ads_management — toggle & budget will fail'}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             )}
