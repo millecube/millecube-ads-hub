@@ -525,21 +525,21 @@ async function buildDetailedReport() {
         }
       }
 
-      const lines = [`🏢 <b>${client.clientCode}</b> — ${client.name}`, `📅 ${currStart} → ${currEnd} | Total: RM ${clientSpend.toFixed(0)}`, ''];
+      const lines = [`🏢 <b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(client.name)}`, `📅 ${currStart} → ${currEnd} | Total: RM ${clientSpend.toFixed(0)}`, ''];
       for (const camp of Object.values(campMap)) {
-        lines.push(`📁 <b>${camp.name}</b>`);
+        lines.push(`📁 <b>${escapeHtml(camp.name)}</b>`);
         for (const as of camp.adsets) {
           const bi  = badgeIcon(as.badge);
           const dot = as.status === 'ACTIVE' ? '🟢' : '⚫';
           const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—/R';
-          lines.push(`  ${dot} ${as.name}`);
+          lines.push(`  ${dot} ${escapeHtml(as.name)}`);
           lines.push(`     💰RM${as.spend.toFixed(0)} | 🎯${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b>`);
         }
         lines.push('');
       }
       clientMessages.push(lines.join('\n'));
     } catch (err) {
-      clientMessages.push(`🏢 <b>${client.clientCode}</b> — ❌ ${err.response?.data?.error?.message || err.message}`);
+      clientMessages.push(`🏢 <b>${escapeHtml(client.clientCode)}</b> — ❌ ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
     }
   }
 
@@ -3154,6 +3154,44 @@ cron.schedule('0 1 * * *', async () => {
     console.log('[TELEGRAM CRON] Done');
   } catch (err) {
     console.error('[TELEGRAM CRON] Failed:', err.message);
+  }
+});
+
+// 7D Report — Mon/Wed/Fri 9:15am MYT (01:15 UTC), one message per client
+cron.schedule('15 1 * * 1,3,5', async () => {
+  console.log('[TELEGRAM CRON] Sending 7D report...');
+  try {
+    const { clientMessages, allSuggestions, currStart, currEnd } = await buildDetailedReport();
+    const title = `📋 <b>7D Report</b>  ${currStart} → ${currEnd}`;
+
+    for (const msg of clientMessages) {
+      await sendTelegram(title + '\n\n' + msg);
+    }
+
+    // Save suggestions so /pause works after the report arrives
+    const chatId = String(process.env.TELEGRAM_CHAT_ID || '');
+    if (chatId) {
+      if (!telegramPending[chatId]) telegramPending[chatId] = { suggestions: [], awaitingConfirm: null };
+      telegramPending[chatId].suggestions = allSuggestions;
+    }
+
+    if (allSuggestions.length === 0) {
+      await sendTelegram('✅ 7D Report: All ad sets are healthy!');
+    } else {
+      const lines = [`⚡ <b>${allSuggestions.length} Suggestion(s)</b>`, ''];
+      for (const s of allSuggestions) {
+        lines.push(`[${s.num}] ${badgeIcon(s.badge)} <b>${escapeHtml(s.badge)}</b> "${escapeHtml(s.adsetName)}" (${escapeHtml(s.clientCode)})`);
+        lines.push(`     Score: ${s.healthScore} | CPM: RM${s.cpm.toFixed(0)} | Freq: ${s.frequency.toFixed(1)} | CTR: ${s.ctr.toFixed(1)}%`);
+        lines.push('');
+      }
+      lines.push(`Tap <b>/pause [number]</b> to act. Example: /pause 1`);
+      await sendTelegram(lines.join('\n'));
+    }
+
+    console.log('[TELEGRAM CRON] 7D report done');
+  } catch (err) {
+    console.error('[TELEGRAM CRON] 7D report failed:', err.message);
+    await sendTelegram('❌ 7D Report failed. Check Render logs.').catch(() => {});
   }
 });
 
