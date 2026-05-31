@@ -572,10 +572,13 @@ async function buildMonthReport() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
   const fmt = d => d.toISOString().slice(0, 10);
   const currStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const prevMonthLastDay  = new Date(now.getFullYear(), now.getMonth(), 0);
   const prevMonthFirstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return buildPeriodReport(currStart, fmt(now), fmt(prevMonthFirstDay), fmt(prevMonthLastDay), {
-    periodLabel: 'Month Total', compLabel: 'prev month',
+  const prevMonthLastDay  = new Date(now.getFullYear(), now.getMonth(), 0); // last day of prev month
+  // Cap prev end at same day-of-month as today (e.g. May 15 → Apr 15; May 31 → Apr 30)
+  const prevEndDay = Math.min(now.getDate(), prevMonthLastDay.getDate());
+  const prevMonthEndDate = new Date(now.getFullYear(), now.getMonth() - 1, prevEndDay);
+  return buildPeriodReport(currStart, fmt(now), fmt(prevMonthFirstDay), fmt(prevMonthEndDate), {
+    periodLabel: 'Month Total', compLabel: 'same period prev month',
   });
 }
 
