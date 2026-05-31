@@ -322,6 +322,79 @@ async function buildTelegramSummary(rangeLabel = 'today') {
   return lines.join('\n');
 }
 
+async function buildDailyMorningReport() {
+  const allClients = await readClients();
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const fmt = d => d.toISOString().slice(0, 10);
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = fmt(yesterday);
+
+  const lines = [`📊 <b>Daily Report — ${dateStr}</b>\n`];
+  let grandTotal = 0;
+
+  for (const client of allClients) {
+    try {
+      const [rows, adsetStruct, campStruct] = await Promise.all([
+        fetchPerfAdsetLevel(client, dateStr, dateStr),
+        fetchAdsetStructure(client).catch(() => []),
+        fetchCampaignStructure(client).catch(() => []),
+      ]);
+
+      const adsetStructMap = {};
+      adsetStruct.forEach(a => { adsetStructMap[a.id] = a; });
+      const campStructMap = {};
+      campStruct.forEach(c => { campStructMap[c.id] = c; });
+
+      let clientSpend = 0;
+      const campMap = {};
+
+      for (const r of rows) {
+        const spend = parseFloat(r.spend || 0);
+        if (spend === 0) continue;
+
+        clientSpend += spend;
+        grandTotal  += spend;
+
+        const struct     = adsetStructMap[r.adset_id] || {};
+        const optGoal    = struct.optimization_goal || '';
+        const objective  = (campStructMap[r.campaign_id] || {}).objective || '';
+        const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+
+        let results = 0, costPerResult = 0;
+        if (actionType) {
+          const cpa = extractCostPerAction(r.cost_per_unique_action_type, actionType) ||
+                      extractCostPerAction(r.cost_per_action_type, actionType);
+          results       = cpa > 0 ? Math.round(spend / cpa) : extractAction(r.actions, actionType);
+          costPerResult = cpa || (results > 0 ? spend / results : 0);
+        }
+
+        if (!campMap[r.campaign_id]) campMap[r.campaign_id] = { name: r.campaign_name, adsets: [] };
+        campMap[r.campaign_id].adsets.push({ name: r.adset_name, spend, results, costPerResult });
+      }
+
+      if (clientSpend === 0) {
+        lines.push(`⚫ <b>${escapeHtml(client.clientCode)}</b> — No spend\n`);
+        continue;
+      }
+
+      lines.push(`\n<b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(client.name)}  💰RM${clientSpend.toFixed(0)}`);
+      for (const camp of Object.values(campMap)) {
+        lines.push(`  📁 ${escapeHtml(camp.name)}`);
+        for (const as of camp.adsets) {
+          const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—';
+          lines.push(`    🟢 ${escapeHtml(as.name)}  RM${as.spend.toFixed(0)} | ${as.results > 0 ? as.results + 'R' : '—'} | ${cprStr}`);
+        }
+      }
+    } catch (err) {
+      lines.push(`\n❓ <b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
+    }
+  }
+
+  lines.push(`\n\n💰 <b>Grand Total: RM ${grandTotal.toFixed(0)}</b>`);
+  lines.push(`🔗 <a href="https://millecube-ads-hub.vercel.app">Open Dashboard</a>`);
+  return lines.join('\n');
+}
+
 async function buildDetailedReport() {
   const allClients = await readClients();
 
@@ -3034,11 +3107,11 @@ app.delete('/api/settings/logo', requireAdmin, async (req, res) => {
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-// Daily Telegram summary — 9am MYT (01:00 UTC)
+// Daily Telegram morning report — 9am MYT (01:00 UTC), sends yesterday's data
 cron.schedule('0 1 * * *', async () => {
-  console.log('[TELEGRAM CRON] Sending daily summary...');
+  console.log('[TELEGRAM CRON] Sending daily morning report...');
   try {
-    await sendTelegram(await buildTelegramSummary('today'));
+    await sendTelegram(await buildDailyMorningReport());
     console.log('[TELEGRAM CRON] Done');
   } catch (err) {
     console.error('[TELEGRAM CRON] Failed:', err.message);
