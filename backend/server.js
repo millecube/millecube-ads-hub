@@ -434,9 +434,10 @@ async function buildDailyMorningReport() {
   return lines.join('\n');
 }
 
-async function buildDetailedReport() {
-  const allClients = await readClients();
+async function buildPeriodReport(currStart, currEnd, prevStartStr, prevEndStr, opts = {}) {
+  const { periodLabel = 'Total', compLabel = 'prev period', monthStartStr = null, todayStr = null } = opts;
 
+  const allClients = await readClients();
   let globalDef = { weights: WEIGHT_DEFAULTS, deltaThresholds: DELTA_DEFAULTS, baseThresholds: BASE_DEFAULTS };
   if (usingMongo()) {
     try {
@@ -446,29 +447,21 @@ async function buildDetailedReport() {
     } catch {}
   }
 
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
-  const fmt = d => d.toISOString().slice(0, 10);
-  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
-  const weekStart = new Date(yesterday); weekStart.setDate(weekStart.getDate() - 6);
-  const prevEnd   = new Date(weekStart); prevEnd.setDate(prevEnd.getDate() - 1);
-  const prevStart = new Date(prevEnd);   prevStart.setDate(prevStart.getDate() - 6);
-  const currStart = fmt(weekStart), currEnd = fmt(yesterday);
-  const prevStartStr = fmt(prevStart), prevEndStr = fmt(prevEnd);
-  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const todayStr = fmt(now);
-
   const allSuggestions = [];
   const clientMessages = [];
 
   for (const client of allClients) {
     try {
-      const [currRows, prevRows, adsetStruct, campStruct, monthRows] = await Promise.all([
+      const fetches = [
         fetchPerfAdsetLevel(client, currStart, currEnd),
         fetchPerfAdsetLevel(client, prevStartStr, prevEndStr).catch(() => []),
         fetchAdsetStructure(client).catch(() => []),
         fetchCampaignStructure(client).catch(() => []),
-        fetchPerfCampaignLevel(client, monthStartStr, todayStr).catch(() => []),
-      ]);
+      ];
+      if (monthStartStr && todayStr) fetches.push(fetchPerfCampaignLevel(client, monthStartStr, todayStr).catch(() => []));
+      const fetched = await Promise.all(fetches);
+      const [currRows, prevRows, adsetStruct, campStruct] = fetched;
+      const monthRows = fetched[4] || [];
 
       const prevMap = {};
       prevRows.forEach(r => { prevMap[r.adset_id] = r; });
@@ -485,9 +478,9 @@ async function buildDetailedReport() {
       let clientSpend = 0;
 
       for (const r of currRows) {
-        const struct    = adsetStructMap[r.adset_id] || {};
-        const optGoal   = struct.optimization_goal || '';
-        const objective = (campStructMap[r.campaign_id] || {}).objective || '';
+        const struct     = adsetStructMap[r.adset_id] || {};
+        const optGoal    = struct.optimization_goal || '';
+        const objective  = (campStructMap[r.campaign_id] || {}).objective || '';
         const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
 
         const spend = parseFloat(r.spend || 0);
@@ -531,28 +524,59 @@ async function buildDetailedReport() {
         }
       }
 
-      const monthSpend = monthRows.reduce((sum, r) => sum + parseFloat(r.spend || 0), 0);
-
-      const lines = [`🏢 <b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(client.name)}`, `📅 ${currStart} → ${currEnd} | 7D Total: RM ${clientSpend.toFixed(0)}`, `<i>R(C) &amp; CPR(C) vs prev 7 days (${prevStartStr} → ${prevEndStr})</i>`, ''];
+      const lines = [
+        `${'🏢'} <b>${escapeHtml(client.clientCode)}</b> ${'—'} ${escapeHtml(client.name)}`,
+        `${'📅'} ${currStart} ${'→'} ${currEnd} | ${periodLabel}: RM ${clientSpend.toFixed(0)}`,
+        `<i>R(C) &amp; CPR(C) vs ${compLabel} (${prevStartStr} ${'→'} ${prevEndStr})</i>`,
+        '',
+      ];
       for (const camp of Object.values(campMap)) {
-        lines.push(`📁 <b>${escapeHtml(camp.name)}</b>`);
+        lines.push(`${'📁'} <b>${escapeHtml(camp.name)}</b>`);
         for (const as of camp.adsets) {
           const bi     = badgeIcon(as.badge);
           const dot    = as.status === 'ACTIVE' ? '🟢' : '⚫';
           const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—/R';
           lines.push(`  ${dot} ${escapeHtml(as.name)}`);
-          lines.push(`     💰RM${as.spend.toFixed(0)} | 🎯${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b> | R:${as.resultC} | CPR:${as.cprC}`);
+          lines.push(`     ${'💰'}RM${as.spend.toFixed(0)} | ${'🎯'}${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b> | R:${as.resultC} | CPR:${as.cprC}`);
         }
         lines.push('');
       }
-      lines.push(`💳 <b>This Month (${monthStartStr} → ${todayStr}):</b> RM ${monthSpend.toFixed(0)}`);
-      clientMessages.push(lines.join('\n'));
+      if (monthStartStr && todayStr) {
+        const monthSpend = monthRows.reduce((sum, r) => sum + parseFloat(r.spend || 0), 0);
+        lines.push(`${'💳'} <b>This Month (${monthStartStr} ${'→'} ${todayStr}):</b> RM ${monthSpend.toFixed(0)}`);
+      }
+      clientMessages.push(lines.join('
+'));
     } catch (err) {
-      clientMessages.push(`🏢 <b>${escapeHtml(client.clientCode)}</b> — ❌ ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
+      clientMessages.push(`${'🏢'} <b>${escapeHtml(client.clientCode)}</b> ${'—'} ${'❌'} ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
     }
   }
 
   return { clientMessages, allSuggestions, currStart, currEnd };
+}
+
+async function buildDetailedReport() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const fmt = d => d.toISOString().slice(0, 10);
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const weekStart = new Date(yesterday); weekStart.setDate(weekStart.getDate() - 6);
+  const prevEnd   = new Date(weekStart); prevEnd.setDate(prevEnd.getDate() - 1);
+  const prevStart = new Date(prevEnd);   prevStart.setDate(prevStart.getDate() - 6);
+  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  return buildPeriodReport(fmt(weekStart), fmt(yesterday), fmt(prevStart), fmt(prevEnd), {
+    periodLabel: '7D Total', compLabel: 'prev 7 days', monthStartStr, todayStr: fmt(now),
+  });
+}
+
+async function buildMonthReport() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
+  const fmt = d => d.toISOString().slice(0, 10);
+  const currStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const prevMonthLastDay  = new Date(now.getFullYear(), now.getMonth(), 0);
+  const prevMonthFirstDay = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  return buildPeriodReport(currStart, fmt(now), fmt(prevMonthFirstDay), fmt(prevMonthLastDay), {
+    periodLabel: 'Month Total', compLabel: 'prev month',
+  });
 }
 
 // Telegram webhook — public (no auth needed)
@@ -613,7 +637,7 @@ app.post('/telegram/webhook', async (req, res) => {
     '📊 today summary':                  '/summary',
     '📅 yesterday':                      '/yesterday',
     '🗓 this month':                     '/month',
-    '📋 full report (7-day + health)':   '/report',
+    '📋 7-day report':                   '/7day',
     '❓ help':                           '/help',
   };
   const cmd = buttonMap[text.toLowerCase()] || text.toLowerCase();
@@ -622,14 +646,13 @@ app.post('/telegram/webhook', async (req, res) => {
   const session = telegramPending[chatId];
 
   try {
-    // ── /report ──
-    if (cmd.startsWith('/report')) {
-      await sendTelegram('⏳ Fetching 7-day report with health scores… this may take 20–30 seconds.');
-      const { clientMessages, allSuggestions } = await buildDetailedReport();
+    // ── shared helper: send period report messages + suggestions ──
+    const sendPeriodReport = async (fetchFn, loadingMsg, reportTitle) => {
+      await sendTelegram(loadingMsg);
+      const { clientMessages, allSuggestions, currStart, currEnd } = await fetchFn();
       session.suggestions = allSuggestions;
-
-      for (const m of clientMessages) await sendTelegram(m);
-
+      const title = `${reportTitle}  ${currStart} → ${currEnd}`;
+      for (const m of clientMessages) await sendTelegram(title + '\n\n' + m);
       if (allSuggestions.length === 0) {
         await sendTelegram('✅ No issues found. All ad sets are healthy!');
       } else {
@@ -640,16 +663,25 @@ app.post('/telegram/webhook', async (req, res) => {
           lines.push(`     Campaign: ${escapeHtml(s.campaignName)}`);
           lines.push('');
         }
-        lines.push(`Tap <b>/pause [number]</b> to act on a suggestion. Example: /pause 1`);
+        lines.push(`Tap <b>/pause [number]</b> to act. Example: /pause 1`);
         await sendTelegram(lines.join('\n'));
       }
+    };
+
+    // ── /7day ──
+    if (cmd.startsWith('/7day')) {
+      await sendPeriodReport(buildDetailedReport, '⏳ Fetching 7-day report… this may take 20–30 seconds.', '📋 <b>7-Day Report</b>');
+
+    // ── /month ──
+    } else if (cmd.startsWith('/month')) {
+      await sendPeriodReport(buildMonthReport, '⏳ Fetching this month\'s report… this may take 20–30 seconds.', '🗓 <b>Month Report</b>');
 
     // ── /pause N ──
     } else if (cmd.startsWith('/pause ')) {
       const num    = parseInt(cmd.replace('/pause ', '').trim());
       const action = session.suggestions.find(s => s.num === num);
       if (!action) {
-        await sendTelegram(`❓ No suggestion #${num} found. Run /report first.`);
+        await sendTelegram(`❓ No suggestion #${num} found. Run /7day or /month first.`);
       } else {
         await sendTelegram([
           `⚠️ <b>Confirm: Pause this ad set?</b>`,
@@ -674,6 +706,10 @@ app.post('/telegram/webhook', async (req, res) => {
     } else if (cmd.startsWith('/summary')) {
       await sendTelegram(await buildTelegramSummary('today'));
 
+    // ── /yesterday ──
+    } else if (cmd.startsWith('/yesterday')) {
+      await sendTelegram(await buildTelegramSummary('yesterday'));
+
     // ── /start — welcome + persistent keyboard ──
     } else if (cmd === '/start') {
       await axios.post(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
@@ -683,8 +719,7 @@ app.post('/telegram/webhook', async (req, res) => {
         reply_markup: {
           keyboard: [
             [{ text: '📊 Today Summary' }, { text: '📅 Yesterday' }, { text: '🗓 This Month' }],
-            [{ text: '📋 Full Report (7-day + Health)' }],
-            [{ text: '❓ Help' }],
+            [{ text: '📋 7-Day Report' }, { text: '❓ Help' }],
           ],
           resize_keyboard: true,
           persistent: true,
@@ -692,23 +727,15 @@ app.post('/telegram/webhook', async (req, res) => {
       });
       await sendTelegram(await buildTelegramSummary('today'));
 
-    // ── /yesterday ──
-    } else if (cmd.startsWith('/yesterday')) {
-      await sendTelegram(await buildTelegramSummary('yesterday'));
-
-    // ── /month ──
-    } else if (cmd.startsWith('/month')) {
-      await sendTelegram(await buildTelegramSummary('month'));
-
     // ── /help ──
     } else if (cmd.startsWith('/help')) {
       await sendTelegram([
         '📋 <b>Millecube Ads Bot — Commands</b>',
         '',
-        '/summary — Today\'s spend for all clients',
-        '/yesterday — Yesterday\'s summary',
-        '/month — This month\'s spend (1st → today)',
-        '/report — 7-day report with health scores + suggestions',
+        '/summary — Today\'s spend (quick)',
+        '/yesterday — Yesterday\'s spend (quick)',
+        '/month — This month\'s full report (adset-level, vs prev month)',
+        '/7day — Last 7-day full report (adset-level, vs prev 7 days)',
         '/pause [N] — Pause a suggested ad set (tap Yes/Cancel button to confirm)',
         '/help — Show this message',
       ].join('\n'));
@@ -728,10 +755,10 @@ async function registerTelegramWebhook() {
     await axios.post(`${base}/setWebhook`, { url: 'https://millecube-ads-hub.onrender.com/telegram/webhook' });
     await axios.post(`${base}/setMyCommands`, {
       commands: [
-        { command: 'summary',   description: '📊 Today\'s spend for all clients' },
-        { command: 'yesterday', description: '📅 Yesterday\'s summary' },
-        { command: 'month',     description: '🗓 This month\'s spend (1st → today)' },
-        { command: 'report',    description: '📋 7-day report with health scores & suggestions' },
+        { command: 'summary',   description: '📊 Today\'s spend (quick summary)' },
+        { command: 'yesterday', description: '📅 Yesterday\'s spend (quick summary)' },
+        { command: 'month',     description: '🗓 This month full report vs prev month' },
+        { command: '7day',      description: '📋 Last 7-day full report vs prev 7 days' },
         { command: 'help',      description: '❓ Show all commands' },
       ],
     });
