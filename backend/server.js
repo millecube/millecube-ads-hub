@@ -300,9 +300,10 @@ async function buildTelegramSummary(rangeLabel = 'today') {
   if (rangeLabel === 'yesterday') {
     const y = new Date(now); y.setDate(y.getDate() - 1);
     dateStart = dateStop = fmt(y); label = 'Yesterday';
-  } else if (rangeLabel === '7d') {
-    const s = new Date(now); s.setDate(s.getDate() - 6);
-    dateStart = fmt(s); dateStop = fmt(now); label = 'Last 7 Days';
+  } else if (rangeLabel === 'month') {
+    dateStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    dateStop  = fmt(now);
+    label = `This Month (${dateStart} → ${dateStop})`;
   } else {
     dateStart = dateStop = fmt(now); label = 'Today';
   }
@@ -611,7 +612,7 @@ app.post('/telegram/webhook', async (req, res) => {
   const buttonMap = {
     '📊 today summary':                  '/summary',
     '📅 yesterday':                      '/yesterday',
-    '📆 last 7 days':                    '/7d',
+    '🗓 this month':                     '/month',
     '📋 full report (7-day + health)':   '/report',
     '❓ help':                           '/help',
   };
@@ -681,7 +682,7 @@ app.post('/telegram/webhook', async (req, res) => {
         parse_mode: 'HTML',
         reply_markup: {
           keyboard: [
-            [{ text: '📊 Today Summary' }, { text: '📅 Yesterday' }, { text: '📆 Last 7 Days' }],
+            [{ text: '📊 Today Summary' }, { text: '📅 Yesterday' }, { text: '🗓 This Month' }],
             [{ text: '📋 Full Report (7-day + Health)' }],
             [{ text: '❓ Help' }],
           ],
@@ -695,9 +696,9 @@ app.post('/telegram/webhook', async (req, res) => {
     } else if (cmd.startsWith('/yesterday')) {
       await sendTelegram(await buildTelegramSummary('yesterday'));
 
-    // ── /7d ──
-    } else if (cmd.startsWith('/7d')) {
-      await sendTelegram(await buildTelegramSummary('7d'));
+    // ── /month ──
+    } else if (cmd.startsWith('/month')) {
+      await sendTelegram(await buildTelegramSummary('month'));
 
     // ── /help ──
     } else if (cmd.startsWith('/help')) {
@@ -706,7 +707,7 @@ app.post('/telegram/webhook', async (req, res) => {
         '',
         '/summary — Today\'s spend for all clients',
         '/yesterday — Yesterday\'s summary',
-        '/7d — Last 7 days summary',
+        '/month — This month\'s spend (1st → today)',
         '/report — 7-day report with health scores + suggestions',
         '/pause [N] — Pause a suggested ad set (tap Yes/Cancel button to confirm)',
         '/help — Show this message',
@@ -729,8 +730,8 @@ async function registerTelegramWebhook() {
       commands: [
         { command: 'summary',   description: '📊 Today\'s spend for all clients' },
         { command: 'yesterday', description: '📅 Yesterday\'s summary' },
+        { command: 'month',     description: '🗓 This month\'s spend (1st → today)' },
         { command: 'report',    description: '📋 7-day report with health scores & suggestions' },
-        { command: '7d',        description: '📆 Last 7 days summary' },
         { command: 'help',      description: '❓ Show all commands' },
       ],
     });
