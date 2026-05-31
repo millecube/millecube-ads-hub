@@ -285,6 +285,13 @@ function badgeIcon(badge) {
   return badge === 'PAUSE' ? '🔴' : badge === 'REFRESH' ? '🔄' : badge === 'WATCH' ? '⚠️' : badge === 'SCALE' ? '🚀' : '✅';
 }
 
+function fmtPct(curr, prev) {
+  if (prev == null) return '—';
+  if (prev === 0)   return curr > 0 ? 'new' : '—';
+  const pct = ((curr - prev) / prev) * 100;
+  return (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%';
+}
+
 async function buildTelegramSummary(rangeLabel = 'today') {
   const allClients = await readClients();
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
@@ -330,14 +337,6 @@ async function buildDailyMorningReport() {
   const dayBefore  = new Date(now); dayBefore.setDate(dayBefore.getDate() - 2);
   const dateStr = fmt(yesterday);
   const dbyStr  = fmt(dayBefore);
-
-  // % change formatter — null prev means no data
-  const fmtPct = (curr, prev) => {
-    if (prev == null) return '—';
-    if (prev === 0)   return curr > 0 ? 'new' : '—';
-    const pct = ((curr - prev) / prev) * 100;
-    return (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%';
-  };
 
   const lines = [`📊 <b>Daily Report — ${dateStr}</b>`, `<i>R(C) &amp; CPR(C) vs ${dbyStr}</i>\n`];
   let grandTotal = 0;
@@ -454,17 +453,20 @@ async function buildDetailedReport() {
   const prevStart = new Date(prevEnd);   prevStart.setDate(prevStart.getDate() - 6);
   const currStart = fmt(weekStart), currEnd = fmt(yesterday);
   const prevStartStr = fmt(prevStart), prevEndStr = fmt(prevEnd);
+  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const todayStr = fmt(now);
 
   const allSuggestions = [];
   const clientMessages = [];
 
   for (const client of allClients) {
     try {
-      const [currRows, prevRows, adsetStruct, campStruct] = await Promise.all([
+      const [currRows, prevRows, adsetStruct, campStruct, monthRows] = await Promise.all([
         fetchPerfAdsetLevel(client, currStart, currEnd),
         fetchPerfAdsetLevel(client, prevStartStr, prevEndStr).catch(() => []),
         fetchAdsetStructure(client).catch(() => []),
         fetchCampaignStructure(client).catch(() => []),
+        fetchPerfCampaignLevel(client, monthStartStr, todayStr).catch(() => []),
       ]);
 
       const prevMap = {};
@@ -517,26 +519,32 @@ async function buildDetailedReport() {
         const { healthScore, badge } = computeCompareHealth(curr, prevM, dt, weights, bt);
         clientSpend += spend;
 
+        const resultC = fmtPct(results, prevM ? prevM.results : null);
+        const cprC    = fmtPct(costPerResult, prevM ? prevM.costPerResult : null);
+
         if (!campMap[r.campaign_id]) campMap[r.campaign_id] = { name: r.campaign_name, adsets: [] };
-        campMap[r.campaign_id].adsets.push({ id: r.adset_id, name: r.adset_name, status: struct.effective_status || 'UNKNOWN', clientId: client.id, clientCode: client.clientCode, campaignName: r.campaign_name, campaignId: r.campaign_id, spend, results, costPerResult, ctr, cpm, frequency: freq, healthScore, badge });
+        campMap[r.campaign_id].adsets.push({ id: r.adset_id, name: r.adset_name, status: struct.effective_status || 'UNKNOWN', clientId: client.id, clientCode: client.clientCode, campaignName: r.campaign_name, campaignId: r.campaign_id, spend, results, costPerResult, ctr, cpm, frequency: freq, healthScore, badge, resultC, cprC });
 
         if (badge === 'PAUSE' || badge === 'REFRESH') {
           allSuggestions.push({ num: allSuggestions.length + 1, badge, adsetId: r.adset_id, adsetName: r.adset_name, clientId: client.id, clientCode: client.clientCode, campaignName: r.campaign_name, campaignId: r.campaign_id, healthScore, spend, cpm, frequency: freq, ctr });
         }
       }
 
-      const lines = [`🏢 <b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(client.name)}`, `📅 ${currStart} → ${currEnd} | Total: RM ${clientSpend.toFixed(0)}`, ''];
+      const monthSpend = monthRows.reduce((sum, r) => sum + parseFloat(r.spend || 0), 0);
+
+      const lines = [`🏢 <b>${escapeHtml(client.clientCode)}</b> — ${escapeHtml(client.name)}`, `📅 ${currStart} → ${currEnd} | 7D Total: RM ${clientSpend.toFixed(0)}`, `<i>R(C) &amp; CPR(C) vs prev 7 days (${prevStartStr} → ${prevEndStr})</i>`, ''];
       for (const camp of Object.values(campMap)) {
         lines.push(`📁 <b>${escapeHtml(camp.name)}</b>`);
         for (const as of camp.adsets) {
-          const bi  = badgeIcon(as.badge);
-          const dot = as.status === 'ACTIVE' ? '🟢' : '⚫';
+          const bi     = badgeIcon(as.badge);
+          const dot    = as.status === 'ACTIVE' ? '🟢' : '⚫';
           const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—/R';
           lines.push(`  ${dot} ${escapeHtml(as.name)}`);
-          lines.push(`     💰RM${as.spend.toFixed(0)} | 🎯${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b>`);
+          lines.push(`     💰RM${as.spend.toFixed(0)} | 🎯${as.results}R | ${cprStr} | CTR${as.ctr.toFixed(1)}% | CPM${as.cpm.toFixed(0)} | F${as.frequency.toFixed(1)} | ${as.healthScore}pts ${bi}<b>${as.badge}</b> | R:${as.resultC} | CPR:${as.cprC}`);
         }
         lines.push('');
       }
+      lines.push(`💳 <b>This Month (${monthStartStr} → ${todayStr}):</b> RM ${monthSpend.toFixed(0)}`);
       clientMessages.push(lines.join('\n'));
     } catch (err) {
       clientMessages.push(`🏢 <b>${escapeHtml(client.clientCode)}</b> — ❌ ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
@@ -3157,8 +3165,8 @@ cron.schedule('0 1 * * *', async () => {
   }
 });
 
-// 7D Report — Mon/Wed/Fri 9:15am MYT (01:15 UTC), one message per client
-cron.schedule('15 1 * * 1,3,5', async () => {
+// 7D Report — Mon/Wed/Fri 9:05am MYT (01:05 UTC), one message per client
+cron.schedule('5 1 * * 1,3,5', async () => {
   console.log('[TELEGRAM CRON] Sending 7D report...');
   try {
     const { clientMessages, allSuggestions, currStart, currEnd } = await buildDetailedReport();
