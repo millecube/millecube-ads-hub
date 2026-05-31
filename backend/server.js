@@ -326,16 +326,27 @@ async function buildDailyMorningReport() {
   const allClients = await readClients();
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
   const fmt = d => d.toISOString().slice(0, 10);
-  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const yesterday  = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const dayBefore  = new Date(now); dayBefore.setDate(dayBefore.getDate() - 2);
   const dateStr = fmt(yesterday);
+  const dbyStr  = fmt(dayBefore);
 
-  const lines = [`📊 <b>Daily Report — ${dateStr}</b>\n`];
+  // % change formatter — null prev means no data
+  const fmtPct = (curr, prev) => {
+    if (prev == null) return '—';
+    if (prev === 0)   return curr > 0 ? 'new' : '—';
+    const pct = ((curr - prev) / prev) * 100;
+    return (pct >= 0 ? '+' : '') + pct.toFixed(0) + '%';
+  };
+
+  const lines = [`📊 <b>Daily Report — ${dateStr}</b>`, `<i>R(C) &amp; CPR(C) vs ${dbyStr}</i>\n`];
   let grandTotal = 0;
 
   for (const client of allClients) {
     try {
-      const [rows, adsetStruct, campStruct] = await Promise.all([
+      const [rows, prevRows, adsetStruct, campStruct] = await Promise.all([
         fetchPerfAdsetLevel(client, dateStr, dateStr),
+        fetchPerfAdsetLevel(client, dbyStr, dbyStr).catch(() => []),
         fetchAdsetStructure(client).catch(() => []),
         fetchCampaignStructure(client).catch(() => []),
       ]);
@@ -344,6 +355,8 @@ async function buildDailyMorningReport() {
       adsetStruct.forEach(a => { adsetStructMap[a.id] = a; });
       const campStructMap = {};
       campStruct.forEach(c => { campStructMap[c.id] = c; });
+      const prevMap = {};
+      prevRows.forEach(r => { prevMap[r.adset_id] = r; });
 
       let clientSpend = 0;
       const campMap = {};
@@ -360,6 +373,7 @@ async function buildDailyMorningReport() {
         const objective  = (campStructMap[r.campaign_id] || {}).objective || '';
         const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
 
+        // Yesterday metrics
         let results = 0, costPerResult = 0;
         if (actionType) {
           const cpa = extractCostPerAction(r.cost_per_unique_action_type, actionType) ||
@@ -367,9 +381,32 @@ async function buildDailyMorningReport() {
           results       = cpa > 0 ? Math.round(spend / cpa) : extractAction(r.actions, actionType);
           costPerResult = cpa || (results > 0 ? spend / results : 0);
         }
+        const impressions = parseInt(r.impressions || 0);
+        const clicks      = parseInt(r.inline_link_clicks || 0);
+        const linkCtr     = impressions > 0 ? (clicks / impressions) * 100 : 0;
+        const cpm         = parseFloat(r.cpm || 0);
+
+        // Day-before-yesterday comparison
+        let prevResults = null, prevCpr = null;
+        const prevRow = prevMap[r.adset_id];
+        if (prevRow) {
+          const pSpend = parseFloat(prevRow.spend || 0);
+          if (actionType) {
+            const pCpa = extractCostPerAction(prevRow.cost_per_unique_action_type, actionType) ||
+                         extractCostPerAction(prevRow.cost_per_action_type, actionType);
+            prevResults = pCpa > 0 ? Math.round(pSpend / pCpa) : extractAction(prevRow.actions, actionType);
+            prevCpr     = pCpa || (prevResults > 0 ? pSpend / prevResults : 0);
+          } else {
+            prevResults = 0;
+            prevCpr     = 0;
+          }
+        }
+
+        const resultC = fmtPct(results, prevResults);
+        const cprC    = fmtPct(costPerResult, prevCpr);
 
         if (!campMap[r.campaign_id]) campMap[r.campaign_id] = { name: r.campaign_name, adsets: [] };
-        campMap[r.campaign_id].adsets.push({ name: r.adset_name, spend, results, costPerResult });
+        campMap[r.campaign_id].adsets.push({ name: r.adset_name, spend, results, costPerResult, clicks, linkCtr, cpm, resultC, cprC });
       }
 
       if (clientSpend === 0) {
@@ -381,8 +418,10 @@ async function buildDailyMorningReport() {
       for (const camp of Object.values(campMap)) {
         lines.push(`  📁 ${escapeHtml(camp.name)}`);
         for (const as of camp.adsets) {
-          const cprStr = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}/R` : '—';
-          lines.push(`    🟢 ${escapeHtml(as.name)}  RM${as.spend.toFixed(0)} | ${as.results > 0 ? as.results + 'R' : '—'} | ${cprStr}`);
+          const resultsStr = as.results > 0 ? `${as.results}` : '—';
+          const cprStr     = as.costPerResult > 0 ? `RM${as.costPerResult.toFixed(0)}` : '—';
+          lines.push(`    🟢 ${escapeHtml(as.name)}`);
+          lines.push(`       RM${as.spend.toFixed(0)} | ${resultsStr}R | ${cprStr}/R | ${as.clicks}clk | ${as.linkCtr.toFixed(1)}% | RM${as.cpm.toFixed(0)}CPM | R:${as.resultC} | CPR:${as.cprC}`);
         }
       }
     } catch (err) {
