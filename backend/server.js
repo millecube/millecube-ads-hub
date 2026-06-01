@@ -1585,10 +1585,15 @@ function getTodayMYT() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
 }
 
+// Safely subtract N days from a YYYY-MM-DD date string using UTC arithmetic only.
+// Avoids the locale-string-to-Date construction bug where 18:00 UTC + 8h = next day in MYT.
+function subtractDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - n)).toISOString().slice(0, 10);
+}
+
 function getYesterdayMYT() {
-  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
-  d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
+  return subtractDays(getTodayMYT(), 1);
 }
 
 function getMonitorDateRange(range, dateStart, dateStop) {
@@ -1604,20 +1609,18 @@ function getMonitorDateRange(range, dateStart, dateStop) {
     return { dateStart: yesterdayMYT, dateStop: yesterdayMYT, rangeKey: 'yesterday' };
   }
   if (range === 'this_month') {
-    const myt   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
-    const first = new Date(myt.getFullYear(), myt.getMonth(), 1);
-    return {
-      dateStart: first.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' }),
-      dateStop:  todayMYT,
-      rangeKey:  'this_month'
-    };
+    const firstDay = todayMYT.slice(0, 7) + '-01';
+    return { dateStart: firstDay, dateStop: todayMYT, rangeKey: 'this_month' };
+  }
+  if (range === 'last_month') {
+    const [y, m] = todayMYT.split('-').map(Number);
+    const firstDay = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 10);
+    const lastDay  = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
+    return { dateStart: firstDay, dateStop: lastDay, rangeKey: 'last_month' };
   }
   // 7d / 14d / 30d: dateStop = yesterday (exclude today's partial data)
-  const days  = range === '7d' ? 7 : range === '14d' ? 14 : 30;
-  const start = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kuala_Lumpur' }));
-  start.setDate(start.getDate() - days); // yesterday − (days−1) = days ago
-  const dateStartStr = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Kuala_Lumpur' });
-  return { dateStart: dateStartStr, dateStop: yesterdayMYT, rangeKey: range || '30d' };
+  const days = range === '7d' ? 7 : range === '14d' ? 14 : 30;
+  return { dateStart: subtractDays(todayMYT, days), dateStop: yesterdayMYT, rangeKey: range || '30d' };
 }
 
 function calcDays(dateStart, dateStop) {
