@@ -2788,10 +2788,10 @@ app.patch('/api/compare/budget', async (req, res) => {
 
     if (usingMongo()) {
       const db = await getDb();
-      // Clear struct cache (holds daily/lifetime_budget) and compare perf cache
+      // Clear struct, compare, and performance caches (all hold budget data)
       await db.collection('monitorCache').deleteMany({
         clientId: client.id,
-        rangeKey: { $regex: '^(compare_v2_|struct_v2_)' }
+        rangeKey: { $regex: '^(compare_v2_|struct_v2_|perf_)' }
       });
     }
     res.json({ ok: true });

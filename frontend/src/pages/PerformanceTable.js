@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { clientsAPI, performanceAPI, prefsAPI } from '../utils/api';
+import { clientsAPI, performanceAPI, prefsAPI, compareAPI } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 
 const DEFAULT_COLS = [
@@ -125,6 +125,29 @@ function InfoPopup({ row, onClose }) {
   );
 }
 
+function updateRowBudget(data, clientId, objectId, newAmount) {
+  if (!data) return data;
+  return {
+    ...data,
+    clients: data.clients.map(c => {
+      if (c.clientId !== clientId) return c;
+      return {
+        ...c,
+        campaigns: c.campaigns.map(camp => {
+          if (camp.id === objectId) return { ...camp, budget: camp.budget ? { ...camp.budget, amount: newAmount } : camp.budget };
+          return {
+            ...camp,
+            adsets: camp.adsets.map(adset => {
+              if (adset.id === objectId) return { ...adset, budget: adset.budget ? { ...adset.budget, amount: newAmount } : adset.budget };
+              return adset;
+            }),
+          };
+        }),
+      };
+    }),
+  };
+}
+
 function updateRowStatus(data, clientId, objectId, newStatus) {
   if (!data) return data;
   return {
@@ -169,6 +192,8 @@ export default function PerformanceTable() {
   const [sortCol, setSortCol] = useState('spend');
   const [sortDir, setSortDir] = useState('desc');
   const [toggling, setToggling] = useState(new Set());
+  const [budgetEdit, setBudgetEdit] = useState({ rowId: null, value: '' });
+  const [budgetSaving, setBudgetSaving] = useState(new Set());
 
   // allColOrder = full ordered list of all columns (visible + hidden)
   const [allColOrder, setAllColOrder] = useState(() => {
@@ -345,6 +370,23 @@ export default function PerformanceTable() {
     }
   }, []);
 
+  // Budget inline edit
+  const handleBudgetSave = useCallback(async (row) => {
+    const newAmount = parseFloat(budgetEdit.value);
+    if (isNaN(newAmount) || newAmount <= 0) { setBudgetEdit({ rowId: null, value: '' }); return; }
+    if (newAmount === row.budget?.amount) { setBudgetEdit({ rowId: null, value: '' }); return; }
+    setBudgetEdit({ rowId: null, value: '' });
+    setBudgetSaving(s => new Set(s).add(row.id));
+    try {
+      await compareAPI.updateBudget({ clientId: row._clientId, objectId: row.id, budgetType: row.budget.type, budgetAmount: newAmount });
+      setData(prev => updateRowBudget(prev, row._clientId, row.id, newAmount));
+    } catch (err) {
+      alert(err.response?.data?.error || 'Budget update failed.');
+    } finally {
+      setBudgetSaving(s => { const n = new Set(s); n.delete(row.id); return n; });
+    }
+  }, [budgetEdit]);
+
   // Expand/collapse
   const toggleExpand = useCallback((key) => {
     setExpanded(prev => {
@@ -517,8 +559,41 @@ export default function PerformanceTable() {
         return <ToggleSwitch active={row.status === 'ACTIVE'} loading={toggling.has(row.id)} onChange={v => handleToggle(row, v)} />;
       case 'status':
         return <StatusBadge status={row.status} />;
-      case 'budget':
-        return row.budget ? `${fmtRM(row.budget.amount)} /${row.budget.type === 'daily' ? 'day' : 'total'}` : '—';
+      case 'budget': {
+        if (!row.budget || row.level === 2) return '—';
+        if (budgetSaving.has(row.id)) return <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>saving…</span>;
+        if (budgetEdit.rowId === row.id) {
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={e => e.stopPropagation()}>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>RM</span>
+              <input
+                autoFocus
+                type="number"
+                min="0"
+                step="0.01"
+                value={budgetEdit.value}
+                onChange={e => setBudgetEdit(b => ({ ...b, value: e.target.value }))}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleBudgetSave(row);
+                  if (e.key === 'Escape') setBudgetEdit({ rowId: null, value: '' });
+                }}
+                onBlur={() => handleBudgetSave(row)}
+                style={{ width: 70, padding: '2px 5px', fontSize: 12, borderRadius: 4, border: '1px solid rgba(50,205,50,0.4)', background: 'rgba(50,205,50,0.06)', color: 'var(--text-primary)', outline: 'none' }}
+              />
+              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>/{row.budget.type === 'daily' ? 'day' : 'total'}</span>
+            </div>
+          );
+        }
+        return (
+          <span
+            onClick={e => { e.stopPropagation(); setBudgetEdit({ rowId: row.id, value: String(row.budget.amount) }); }}
+            title="Click to edit budget"
+            style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(50,205,50,0.35)', paddingBottom: 1 }}
+          >
+            {fmtRM(row.budget.amount)} /{row.budget.type === 'daily' ? 'day' : 'total'}
+          </span>
+        );
+      }
       case 'spend':
         return fmtRM(row.spend);
       case 'impressions':
@@ -558,7 +633,7 @@ export default function PerformanceTable() {
       default:
         return '—';
     }
-  }, [toggling, handleToggle]);
+  }, [toggling, handleToggle, budgetEdit, budgetSaving, handleBudgetSave]);
 
   const RANGES = [
     { key: 'today', label: 'Today' },
