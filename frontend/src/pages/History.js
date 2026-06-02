@@ -150,8 +150,7 @@ export default function History() {
                 <th>Status</th>
                 <th>Created</th>
                 <th>Updated</th>
-                <th>Download</th>
-                <th>Drive</th>
+                <th colSpan={2}>Download</th>
                 <th></th>
               </tr>
             </thead>
@@ -188,23 +187,18 @@ export default function History() {
                       : '—'
                     }
                   </td>
-                  <td>
-                    {job.filePath ? (
+                  <td colSpan={2}>
+                    {job.driveUrl ? (
+                      <a href={job.driveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-primary btn-sm"
+                        style={{ textDecoration: 'none' }}>
+                        ↓ Download
+                      </a>
+                    ) : job.filePath ? (
                       <a href={backendUrl(job.filePath)} download className="btn btn-primary btn-sm" style={{ textDecoration: 'none' }}>
                         ↓ .docx
                       </a>
                     ) : job.status === 'running' ? (
                       <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Generating…</span>
-                    ) : (
-                      <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>—</span>
-                    )}
-                  </td>
-                  <td>
-                    {job.driveUrl ? (
-                      <a href={job.driveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-sm"
-                        style={{ textDecoration: 'none', background: 'rgba(26,127,204,0.15)', color: '#1A7FCC', border: '1px solid rgba(26,127,204,0.3)' }}>
-                        ↗ Drive
-                      </a>
                     ) : (
                       <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>—</span>
                     )}
@@ -227,12 +221,9 @@ export default function History() {
 
       {/* File system note */}
       <div className="glass" style={s.noteBox}>
-        <div style={s.noteTitle}>📁 File Storage Location</div>
+        <div style={s.noteTitle}>📁 File Storage</div>
         <div style={s.noteBody}>
-          Reports are saved on the server at:
-          <code style={s.codePath}> /reports/[CLIENT_CODE]/[filename].docx</code>
-          <br />
-          Each client gets its own subfolder. Download via the button above or directly from the server filesystem.
+          Reports are automatically uploaded to Google Drive after generation. Use the Download button to open from Drive. The local server copy is deleted on every redeploy.
         </div>
       </div>
     </div>
