@@ -545,8 +545,7 @@ async function buildPeriodReport(currStart, currEnd, prevStartStr, prevEndStr, o
         const monthSpend = monthRows.reduce((sum, r) => sum + parseFloat(r.spend || 0), 0);
         lines.push(`${'💳'} <b>This Month (${monthStartStr} ${'→'} ${todayStr}):</b> RM ${monthSpend.toFixed(0)}`);
       }
-      clientMessages.push(lines.join('
-'));
+      clientMessages.push(lines.join('\n'));
     } catch (err) {
       clientMessages.push(`${'🏢'} <b>${escapeHtml(client.clientCode)}</b> ${'—'} ${'❌'} ${escapeHtml(err.response?.data?.error?.message || err.message)}`);
     }
