@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { clientsAPI, jobsAPI, schedulesAPI, settingsAPI } from '../utils/api';
 
 const statusColor = { done: '#32cd32', running: '#f5a623', failed: '#ff4d4d' };
@@ -22,6 +22,17 @@ export default function Dashboard() {
     );
     return () => clearInterval(interval);
   }, []);
+
+  const [selectedClientId, setSelectedClientId] = useState('');
+
+  // Auto-select first client once loaded
+  useEffect(() => {
+    if (clients.length > 0 && !selectedClientId) setSelectedClientId(clients[0].id);
+  }, [clients]);
+
+  const selectedClient = useMemo(() => clients.find(c => c.id === selectedClientId) || null, [clients, selectedClientId]);
+  const clientSchedule = useMemo(() => schedules.find(s => s.clientId === selectedClientId) || null, [schedules, selectedClientId]);
+  const clientJobs     = useMemo(() => jobs.filter(j => j.clientCode === selectedClient?.clientCode), [jobs, selectedClient]);
 
   const activeSchedules = schedules.filter(s => s.active).length;
   const doneJobs = jobs.filter(j => j.status === 'done').length;
@@ -110,21 +121,15 @@ export default function Dashboard() {
                       {new Date(job.createdAt).toLocaleString('en-MY', { dateStyle: 'short', timeStyle: 'short' })}
                     </td>
                     <td>
-                      {job.filePath && (
-                        <a
-                          href={job.filePath}
-                          download
-                          className="btn btn-ghost btn-sm"
-                          style={{ textDecoration: 'none' }}
-                        >
+                      {job.driveUrl ? (
+                        <a href={job.driveUrl} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" style={{ textDecoration: 'none' }}>
                           ↓ Download
                         </a>
-                      )}
-                      {job.status === 'failed' && (
+                      ) : job.status === 'failed' ? (
                         <span style={{ fontSize: 11, color: '#ff4d4d' }} title={job.error}>
                           ⚠ {job.error?.slice(0, 40)}…
                         </span>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -134,32 +139,63 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Clients Quick Overview */}
+      {/* Client Quick View */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
-          <h2 style={styles.sectionTitle}>Connected Clients</h2>
+          <h2 style={styles.sectionTitle}>Client Overview</h2>
+          <span className="badge badge-dim">{clients.length} clients</span>
         </div>
-        <div style={styles.clientGrid} className="client-grid">
-          {clients.map(c => (
-            <div key={c.id} className="glass" style={styles.clientCard}>
-              <div style={styles.clientCodeBadge}>{c.clientCode}</div>
-              <div style={styles.clientName}>{c.name}</div>
-              <div style={styles.clientMeta}>Ad Account: {c.adAccountId}</div>
-              <div style={styles.clientMeta}>
-                {schedules.find(s => s.clientId === c.id)
-                  ? <span className="badge badge-green">Scheduled</span>
-                  : <span className="badge badge-dim">Manual</span>
-                }
+
+        {/* Dropdown */}
+        <select
+          className="form-input"
+          value={selectedClientId}
+          onChange={e => setSelectedClientId(e.target.value)}
+          style={{ maxWidth: 320, marginBottom: 16, fontSize: 13 }}
+        >
+          {clients.length === 0
+            ? <option value="">No clients yet</option>
+            : clients.map(c => (
+                <option key={c.id} value={c.id}>{c.clientCode} — {c.name}</option>
+              ))
+          }
+        </select>
+
+        {/* Selected client detail card */}
+        {selectedClient && (
+          <div className="glass" style={styles.clientDetail}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+              <span style={styles.clientCodeBadge}>{selectedClient.clientCode}</span>
+              <span style={styles.clientName}>{selectedClient.name}</span>
+              {clientSchedule
+                ? <span className="badge badge-green">Auto Scheduled</span>
+                : <span className="badge badge-dim">Manual Only</span>
+              }
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+              <div style={styles.detailRow}>
+                <span style={styles.detailLabel}>Ad Account</span>
+                <span style={styles.detailValue}>{selectedClient.adAccountId || '—'}</span>
               </div>
+              {clientSchedule && (
+                <div style={styles.detailRow}>
+                  <span style={styles.detailLabel}>Schedule</span>
+                  <span style={styles.detailValue}>{clientSchedule.frequency} · {clientSchedule.dayOfMonth ? `Day ${clientSchedule.dayOfMonth}` : clientSchedule.dayOfWeek || '—'}</span>
+                </div>
+              )}
+              <div style={styles.detailRow}>
+                <span style={styles.detailLabel}>Recent Jobs</span>
+                <span style={styles.detailValue}>{clientJobs.length > 0 ? `${clientJobs.filter(j => j.status === 'done').length} done` : 'None yet'}</span>
+              </div>
+              {clientJobs[0] && (
+                <div style={styles.detailRow}>
+                  <span style={styles.detailLabel}>Last Report</span>
+                  <span style={styles.detailValue}>{clientJobs[0].period}</span>
+                </div>
+              )}
             </div>
-          ))}
-          {clients.length === 0 && !loading && (
-            <div className="glass" style={{ ...styles.clientCard, opacity: 0.5 }}>
-              <div style={styles.emptyIcon}>+</div>
-              <div style={{ fontSize: 13 }}>Add your first client</div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -204,12 +240,14 @@ const styles = {
     border: '1px solid rgba(50,205,50,0.25)',
     borderRadius: 6, padding: '2px 8px', fontSize: 12, fontWeight: 700, letterSpacing: 0.5
   },
-  clientGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 14 },
-  clientCard: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 6 },
+  clientDetail: { padding: '20px 24px' },
   clientCodeBadge: {
     fontSize: 13, fontWeight: 800, color: '#32cd32', letterSpacing: 2,
-    marginBottom: 4
+    background: 'rgba(50,205,50,0.1)', border: '1px solid rgba(50,205,50,0.25)',
+    borderRadius: 6, padding: '2px 10px',
   },
-  clientName: { fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' },
-  clientMeta: { fontSize: 11, color: 'var(--text-muted)' }
+  clientName: { fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' },
+  detailRow: { display: 'flex', flexDirection: 'column', gap: 3 },
+  detailLabel: { fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.8 },
+  detailValue: { fontSize: 13, color: 'var(--text-primary)', fontWeight: 500 },
 };
