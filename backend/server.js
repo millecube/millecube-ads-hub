@@ -383,7 +383,7 @@ async function buildDailyMorningReport() {
         const struct     = adsetStructMap[r.adset_id] || {};
         const optGoal    = struct.optimization_goal || '';
         const objective  = (campStructMap[r.campaign_id] || {}).objective || '';
-        const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+        const actionType = resolveActionType(optGoal, objective);
 
         // Yesterday metrics
         let results = 0, costPerResult = 0;
@@ -493,7 +493,7 @@ async function buildPeriodReport(currStart, currEnd, prevStartStr, prevEndStr, o
         const struct     = adsetStructMap[r.adset_id] || {};
         const optGoal    = struct.optimization_goal || '';
         const objective  = (campStructMap[r.campaign_id] || {}).objective || '';
-        const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+        const actionType = resolveActionType(optGoal, objective);
 
         const spend = parseFloat(r.spend || 0);
         const ctr   = parseFloat(r.ctr || 0);
@@ -1610,6 +1610,14 @@ function actionTypeForObjective(objective) {
   return 'onsite_conversion.messaging_conversation_started_7d';
 }
 
+// Resolve the result action type from adset optimization_goal + campaign objective.
+// Campaign LEADS objective always wins — Meta always reports 'lead' for OUTCOME_LEADS regardless
+// of whether the adset optimization_goal is CONVERSATIONS or LEAD_GENERATION.
+function resolveActionType(optGoal, objective) {
+  if ((objective || '').toUpperCase().includes('LEAD')) return 'lead';
+  return actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+}
+
 const MONITOR_TTL_MS = 30 * 60 * 1000;
 const BENCH_DEFAULTS = { ctr: 0.8, cpm: 25, cpr: 50, frequency: 3.5 };
 
@@ -1901,9 +1909,8 @@ function buildPerfHierarchy(campIns, adsetIns, adIns, campStruct, adsetStruct, a
   return campIns.map(c => {
     const cs = campMap[c.campaign_id] || {};
     const objective = cs.objective || '';
-    // ad set opt goal takes priority over campaign objective for result metric
     const resolveResults = (m, rawRow, optGoal) => {
-      const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+      const actionType = resolveActionType(optGoal, objective);
       // Prefer cost_per_unique_action_type (counts unique people, matches Ads Manager)
       // Fall back to cost_per_action_type if unique is not available for this action type
       const costPerResult =
@@ -2410,7 +2417,7 @@ app.get('/api/performance/table', async (req, res) => {
     }
     const clients = (await Promise.all(visible.map(async (client) => {
       try {
-        const cacheKey = `perf_v5_${rangeKey}`;
+        const cacheKey = `perf_v6_${rangeKey}`;
         let cached = await getMonitorCache(client.id, cacheKey);
         if (!cached) {
           const [campIns, adsetIns, adIns, campStruct, adsetStruct, adStruct] = await Promise.all([
@@ -2660,7 +2667,9 @@ app.get('/api/compare', async (req, res) => {
       }
 
       const curr = extractPerfMetrics(r);
-      const actionType = actionTypeForGoal(optGoal) || actionTypeForObjective(objective);
+      // For adset/ad rows objective is '', so fall back to parent campaign objective
+      const effectiveObjective = objective || (campMap[r.campaign_id] || {}).objective || '';
+      const actionType = resolveActionType(optGoal, effectiveObjective);
       let results = 0, costPerResult = 0;
       if (actionType) {
         const cpa = extractCostPerAction(r.cost_per_unique_action_type, actionType) ||
