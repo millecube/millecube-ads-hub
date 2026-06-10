@@ -214,9 +214,16 @@ export default function Clients() {
   const isAdmin = user?.role === 'admin';
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [modal,   setModal]   = useState(null); // null | 'new' | clientObj
 
-  const load = () => clientsAPI.getAssigned().then(setClients).finally(() => setLoading(false));
+  const load = () => {
+    setLoadError(null);
+    clientsAPI.getAssigned()
+      .then(setClients)
+      .catch(err => setLoadError(err.response?.data?.error || err.message || 'Failed to load clients'))
+      .finally(() => setLoading(false));
+  };
   useEffect(() => { load(); }, []);
 
   const handleDelete = async (id, name) => {
@@ -241,6 +248,13 @@ export default function Clients() {
       <div className="glass table-scroll-wrap" style={s.tableWrap}>
         {loading ? (
           <div style={s.loading}><div className="spinner" /></div>
+        ) : loadError ? (
+          <div style={s.empty}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>⚠</div>
+            <div style={{ marginBottom: 8, color: 'var(--danger, #e55)' }}>Failed to load clients</div>
+            <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--text-muted)' }}>{loadError}</div>
+            <button className="btn btn-primary" onClick={load}>Retry</button>
+          </div>
         ) : clients.length === 0 ? (
           <div style={s.empty}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>◉</div>

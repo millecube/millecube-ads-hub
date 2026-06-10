@@ -213,7 +213,19 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ── Health (public — used by UptimeRobot) ─────────────────────────────────────
-app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'file';
+  if (USE_MONGO) {
+    try {
+      const db = await getDb();
+      await db.command({ ping: 1 });
+      dbStatus = 'mongo';
+    } catch {
+      dbStatus = _mongoFailed ? 'mongo_failed' : 'mongo_error';
+    }
+  }
+  res.json({ ok: true, time: new Date().toISOString(), db: dbStatus });
+});
 
 // ── Site Settings — GET is public so favicon loads before login ───────────────
 app.get('/api/settings/public', async (req, res) => {
@@ -1379,6 +1391,17 @@ app.put('/api/clients/:id/assign', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'userIds must be an array' });
   }
   try {
+    if (usingMongo()) {
+      const db = await getDb();
+      const result = await db.collection('clients').findOneAndUpdate(
+        { id: req.params.id },
+        { $set: { assignedUsers: userIds, updatedAt: new Date().toISOString() } },
+        { returnDocument: 'after' }
+      );
+      if (!result) return res.status(404).json({ error: 'Client not found' });
+      const { _id, ...client } = result;
+      return res.json({ ...client, accessToken: client.accessToken ? '••••••••' + client.accessToken.slice(-6) : null });
+    }
     const clients = await readClients();
     const idx = clients.findIndex(c => c.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Client not found' });
@@ -1396,6 +1419,16 @@ app.put('/api/clients/:id/budget-editors', requireAdmin, async (req, res) => {
   const { userIds } = req.body;
   if (!Array.isArray(userIds)) return res.status(400).json({ error: 'userIds must be an array' });
   try {
+    if (usingMongo()) {
+      const db = await getDb();
+      const result = await db.collection('clients').findOneAndUpdate(
+        { id: req.params.id },
+        { $set: { budgetEditors: userIds, updatedAt: new Date().toISOString() } },
+        { returnDocument: 'after' }
+      );
+      if (!result) return res.status(404).json({ error: 'Client not found' });
+      return res.json({ ok: true, budgetEditors: userIds });
+    }
     const clients = await readClients();
     const idx = clients.findIndex(c => c.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Client not found' });
